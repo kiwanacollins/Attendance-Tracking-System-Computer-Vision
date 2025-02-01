@@ -1,35 +1,51 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Download, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { LogEntry } from '../types';
 import StatusBadge from '../components/StatusBadge';
+import { usePeopleCount } from '../context/PeopleCountContext';
 
-// Mock data - replace with actual API call
-const generateMockLogs = (): LogEntry[] => {
-  const logs: LogEntry[] = [];
-  const now = new Date();
-  
-  for (let i = 0; i < 50; i++) {
-    logs.push({
-      timestamp: new Date(now.getTime() - i * 300000).toISOString(), // 5 min intervals
-      count: Math.floor(Math.random() * 10),
-      status: {
-        status: Math.random() > 0.9 ? 'error' : Math.random() > 0.8 ? 'warning' : 'active',
-        message: 'System status message'
-      }
-    });
-  }
-  
-  return logs;
-};
+const MAX_LOGS = 1000; // Maximum number of logs to store
 
 export default function Logs() {
-  const [logs] = useState<LogEntry[]>(generateMockLogs());
+  const { count } = usePeopleCount();
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [search, setSearch] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   
   const ITEMS_PER_PAGE = 10;
+
+  // Add new log entry when count changes
+  useEffect(() => {
+    const newLog: LogEntry = {
+      timestamp: new Date().toISOString(),
+      count,
+      status: {
+        status: count === 0 ? 'warning' : 'active',
+        message: count === 0 ? 'No individuals detected' : 'Normal operation'
+      }
+    };
+
+    setLogs(prevLogs => {
+      const updatedLogs = [newLog, ...prevLogs];
+      // Keep only the last MAX_LOGS entries
+      return updatedLogs.slice(0, MAX_LOGS);
+    });
+  }, [count]);
+
+  // Load logs from localStorage on mount
+  useEffect(() => {
+    const savedLogs = localStorage.getItem('surveillance-logs');
+    if (savedLogs) {
+      setLogs(JSON.parse(savedLogs));
+    }
+  }, []);
+
+  // Save logs to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem('surveillance-logs', JSON.stringify(logs));
+  }, [logs]);
 
   const filteredLogs = logs.filter(log => {
     const matchesSearch = log.timestamp.includes(search) || 
