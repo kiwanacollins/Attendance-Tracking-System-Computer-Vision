@@ -19,7 +19,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <div className="flex flex-col h-full">
           <div className="flex items-center justify-center h-16 bg-gray-900">
             <Camera className="w-8 h-8 text-blue-500" />
-            <span className="ml-2 text-xl font-bold text-white">SurveillanceAI</span>
+            <span className="ml-2 text-xl font-bold text-white">Automated Counting Camera</span>
           </div>
           <div className="flex-1 px-4 py-6">
             {navItems.map(({ path, icon: Icon, label }) => (
