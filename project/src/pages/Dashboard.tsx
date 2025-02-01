@@ -13,6 +13,7 @@ import {
   Legend,
   Filler
 } from 'chart.js';
+import { usePeopleCount } from '../context/PeopleCountContext';
 
 ChartJS.register(
   CategoryScale,
@@ -26,20 +27,17 @@ ChartJS.register(
 );
 
 export default function Dashboard() {
-  const [count, setCount] = useState(0);
+  const { count } = usePeopleCount();
   const [historicalData, setHistoricalData] = useState<number[]>([]);
   const [timeLabels, setTimeLabels] = useState<string[]>([]);
   const [status, setStatus] = useState({ status: 'active' as const, message: 'System operating normally' });
 
   useEffect(() => {
-    // Update count every second
+    // Update historical data every second
     const interval = setInterval(() => {
-      const newCount = Math.floor(Math.random() * 10); // Simulated count, replace with actual data
-      setCount(newCount);
-      
-      // Update historical data
+      // Update historical data with the current count
       setHistoricalData(prev => {
-        const newData = [...prev, newCount];
+        const newData = [...prev, count];
         return newData.slice(-10); // Keep last 10 data points
       });
       
@@ -58,7 +56,7 @@ export default function Dashboard() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [count]);
 
   const chartData = {
     labels: timeLabels,

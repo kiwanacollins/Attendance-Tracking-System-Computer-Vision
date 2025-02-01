@@ -6,20 +6,23 @@ import Dashboard from './pages/Dashboard';
 import Config from './pages/Config';
 import Logs from './pages/Logs';
 import Errors from './pages/Errors';
+import { PeopleCountProvider } from './context/PeopleCountContext';
 
 function App() {
   return (
-    <BrowserRouter>
-      <Layout>
-        <Routes>
-          <Route path="/" element={<LiveFeed />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/config" element={<Config />} />
-          <Route path="/logs" element={<Logs />} />
-          <Route path="/errors" element={<Errors />} />
-        </Routes>
-      </Layout>
-    </BrowserRouter>
+    <PeopleCountProvider>
+      <BrowserRouter>
+        <Layout>
+          <Routes>
+            <Route path="/" element={<LiveFeed />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/config" element={<Config />} />
+            <Route path="/logs" element={<Logs />} />
+            <Route path="/errors" element={<Errors />} />
+          </Routes>
+        </Layout>
+      </BrowserRouter>
+    </PeopleCountProvider>
   );
 }
 

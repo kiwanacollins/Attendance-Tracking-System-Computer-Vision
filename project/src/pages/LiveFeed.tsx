@@ -3,6 +3,7 @@ import { Detection } from '../types';
 import { Pause, Play, Maximize } from 'lucide-react';
 import * as tf from '@tensorflow/tfjs';
 import * as cocossd from '@tensorflow-models/coco-ssd';
+import { usePeopleCount } from '../context/PeopleCountContext';
 
 export default function LiveFeed() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -13,6 +14,7 @@ export default function LiveFeed() {
   const [isVideoReady, setIsVideoReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const retryTimeoutRef = useRef<number>();
+  const { setCount } = usePeopleCount();
 
   useEffect(() => {
     const loadModel = async () => {
@@ -91,6 +93,8 @@ export default function LiveFeed() {
 
       const predictions = await model.detect(videoRef.current);
       setDetections(predictions);
+      const peopleCount = predictions.filter(d => d.class === 'person').length;
+      setCount(peopleCount); // Update the shared count
       setError(null);
 
       const ctx = canvasRef.current.getContext('2d');
