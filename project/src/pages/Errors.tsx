@@ -49,7 +49,8 @@ export default function Errors() {
   };
 
   const clearResolvedErrors = () => {
-    setErrors(errors.filter(error => !error.resolved));
+    const unresolvedErrors = errors.filter(error => !error.resolved);
+    setErrors(unresolvedErrors);
   };
 
   const markAsResolved = (id: string) => {
