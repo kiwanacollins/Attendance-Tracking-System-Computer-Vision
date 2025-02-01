@@ -24,13 +24,39 @@ export function PeopleCountProvider({ children }: { children: ReactNode }) {
 
   // Update logs when count changes
   useEffect(() => {
+    const getStatus = (count: number): SystemStatus => {
+      if (count === 0) {
+        return {
+          status: 'warning',
+          message: 'No individuals detected in frame'
+        };
+      }
+      
+      if (count > 20) {
+        return {
+          status: 'warning',
+          message: 'High occupancy detected'
+        };
+      }
+
+      // Simulate occasional errors (you might want to remove this in production)
+      if (Math.random() < 0.05) {  // 5% chance of error
+        return {
+          status: 'error',
+          message: 'Camera feed interruption detected'
+        };
+      }
+
+      return {
+        status: 'active',
+        message: 'Normal operation'
+      };
+    };
+
     const newLog: LogEntry = {
       timestamp: new Date().toISOString(),
       count,
-      status: {
-        status: count === 0 ? 'warning' : 'active',
-        message: count === 0 ? 'No individuals detected' : 'Normal operation'
-      }
+      status: getStatus(count)
     };
 
     setLogs(prevLogs => {

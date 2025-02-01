@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AlertCircle, ChevronDown, ChevronUp, XCircle } from 'lucide-react';
+import { usePeopleCount } from '../context/PeopleCountContext';
 
 interface SystemError {
   id: string;
@@ -12,45 +13,30 @@ interface SystemError {
   suggestedAction: string;
 }
 
-// Mock data - replace with actual API call
-const generateMockErrors = (): SystemError[] => {
-  return [
-    {
-      id: '1',
-      timestamp: new Date(Date.now() - 300000).toISOString(),
-      title: 'Camera Disconnected',
-      description: 'Lost connection to the primary camera feed.',
-      code: 'ERR_CAM_001',
-      severity: 'high',
-      resolved: false,
-      suggestedAction: 'Check camera connection and power supply.',
-    },
-    {
-      id: '2',
-      timestamp: new Date(Date.now() - 900000).toISOString(),
-      title: 'Low Frame Rate',
-      description: 'Video feed frame rate has dropped below acceptable threshold.',
-      code: 'ERR_PERF_002',
-      severity: 'medium',
-      resolved: false,
-      suggestedAction: 'Check system resources and network bandwidth.',
-    },
-    {
-      id: '3',
-      timestamp: new Date(Date.now() - 1800000).toISOString(),
-      title: 'Detection Service Warning',
-      description: 'AI detection service is experiencing delays.',
-      code: 'ERR_AI_003',
-      severity: 'low',
-      resolved: false,
-      suggestedAction: 'Monitor system performance and restart if necessary.',
-    },
-  ];
-};
-
 export default function Errors() {
-  const [errors, setErrors] = useState<SystemError[]>(generateMockErrors());
+  const { logs } = usePeopleCount();
+  const [errors, setErrors] = useState<SystemError[]>([]);
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
+
+  // Convert logs with warning/error status into SystemError objects
+  useEffect(() => {
+    const newErrors = logs
+      .filter(log => log.status.status !== 'active')
+      .map(log => ({
+        id: log.timestamp,
+        timestamp: log.timestamp,
+        title: log.status.status === 'error' ? 'System Error' : 'System Warning',
+        description: log.status.message,
+        code: log.status.status === 'error' ? 'ERR_SYS_001' : 'WARN_SYS_001',
+        severity: log.status.status === 'error' ? 'high' : 'medium',
+        resolved: false,
+        suggestedAction: log.status.status === 'error' 
+          ? 'Check system configuration and camera connection'
+          : 'Monitor system performance and check camera feed'
+      }));
+    
+    setErrors(newErrors);
+  }, [logs]);
 
   const toggleError = (id: string) => {
     const newExpanded = new Set(expandedErrors);
