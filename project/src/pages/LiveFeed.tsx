@@ -15,6 +15,7 @@ export default function LiveFeed() {
   const [error, setError] = useState<string | null>(null);
   const retryTimeoutRef = useRef<number>();
   const { setCount } = usePeopleCount();
+  const animationFrameRef = useRef<number>(); // Add this line
 
   useEffect(() => {
     const loadModel = async () => {
@@ -82,12 +83,18 @@ export default function LiveFeed() {
   }, []);
 
   const detectFrame = async () => {
-    if (!model || !videoRef.current || !canvasRef.current || isPaused || !isVideoReady) return;
+    if (!model || !videoRef.current || !canvasRef.current || !isVideoReady) return;
+    if (isPaused) {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+      return;
+    }
 
     try {
       // Ensure video is playing and ready
       if (videoRef.current.readyState !== 4) {
-        requestAnimationFrame(detectFrame);
+        animationFrameRef.current = requestAnimationFrame(detectFrame);
         return;
       }
 
@@ -121,7 +128,7 @@ export default function LiveFeed() {
         );
       });
 
-      requestAnimationFrame(detectFrame);
+      animationFrameRef.current = requestAnimationFrame(detectFrame);
     } catch (error) {
       console.error('Detection error:', error);
       // Only set error if it's persistent
@@ -131,7 +138,7 @@ export default function LiveFeed() {
           retryTimeoutRef.current = undefined;
         }, 5000);
       }
-      requestAnimationFrame(detectFrame);
+      animationFrameRef.current = requestAnimationFrame(detectFrame);
     }
   };
 
@@ -139,9 +146,24 @@ export default function LiveFeed() {
     if (isVideoReady) {
       detectFrame();
     }
+    
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
   }, [model, isPaused, isVideoReady]);
 
-  const togglePause = () => setIsPaused(!isPaused);
+  const togglePause = () => {
+    setIsPaused(!isPaused);
+    if (!isPaused) { // If we're about to pause
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    } else { // If we're about to resume
+      detectFrame();
+    }
+  };
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
