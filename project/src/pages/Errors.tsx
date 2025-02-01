@@ -22,20 +22,29 @@ export default function Errors() {
   useEffect(() => {
     const newErrors = logs
       .filter(log => log.status.status !== 'active')
-      .map(log => ({
-        id: log.timestamp,
-        timestamp: log.timestamp,
-        title: log.status.status === 'error' ? 'System Error' : 'System Warning',
-        description: log.status.message,
-        code: log.status.status === 'error' ? 'ERR_SYS_001' : 'WARN_SYS_001',
-        severity: log.status.status === 'error' ? 'high' : 'medium',
-        resolved: false,
-        suggestedAction: log.status.status === 'error' 
-          ? 'Check system configuration and camera connection'
-          : 'Monitor system performance and check camera feed'
-      }));
+      .map(log => {
+        // Check if error already exists to preserve resolved status
+        const existingError = errors.find(err => err.timestamp === log.timestamp);
+        return {
+          id: log.timestamp,
+          timestamp: log.timestamp,
+          title: log.status.status === 'error' ? 'System Error' : 'System Warning',
+          description: log.status.message,
+          code: log.status.status === 'error' ? 'ERR_SYS_001' : 'WARN_SYS_001',
+          severity: log.status.status === 'error' ? 'high' : 'medium',
+          resolved: existingError ? existingError.resolved : false,
+          suggestedAction: log.status.status === 'error' 
+            ? 'Check system configuration and camera connection'
+            : 'Monitor system performance and check camera feed'
+        };
+      });
     
-    setErrors(newErrors);
+    // Merge new errors with existing ones, preserving resolved status
+    const mergedErrors = [...newErrors].sort((a, b) => 
+      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+    
+    setErrors(mergedErrors);
   }, [logs]);
 
   const toggleError = (id: string) => {
