@@ -224,6 +224,7 @@ export default function Courses() {
                           onClick={() => removeScheduleEntry(index)}
                           className="text-red-400 hover:text-red-300"
                         >
+                          {/* yes */}
                           <Trash2 size={16} />
                         </button>
                       )}
