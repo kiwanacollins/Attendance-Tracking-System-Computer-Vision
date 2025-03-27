@@ -1,10 +1,12 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Camera, BarChart2, Settings, AlertCircle, ClipboardList } from 'lucide-react';
+import { Camera, BarChart2, Settings, AlertCircle, ClipboardList, Users, BookOpen } from 'lucide-react';
 
 const navItems = [
   { path: '/', icon: Camera, label: 'Live Feed' },
   { path: '/dashboard', icon: BarChart2, label: 'Dashboard' },
+  { path: '/students', icon: Users, label: 'Students' },
+  { path: '/courses', icon: BookOpen, label: 'Courses' },
   { path: '/config', icon: Settings, label: 'Configuration' },
   { path: '/logs', icon: ClipboardList, label: 'Logs' },
   { path: '/errors', icon: AlertCircle, label: 'Errors' },
@@ -19,7 +21,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <div className="flex flex-col h-full">
           <div className="flex items-center justify-center h-16 bg-gray-900">
             <Camera className="w-8 h-8 text-blue-500" />
-            <span className="ml-2 text-xl font-bold text-white">Automated Counting Camera</span>
+            <span className="ml-2 text-xl font-bold text-white">Attendance Tracking</span>
           </div>
           <div className="flex-1 px-4 py-6">
             {navItems.map(({ path, icon: Icon, label }) => (

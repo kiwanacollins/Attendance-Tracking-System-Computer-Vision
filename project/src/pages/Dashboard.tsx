@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Line } from 'react-chartjs-2';
-import { RefreshCw } from 'lucide-react';
+import { Line, Bar } from 'react-chartjs-2';
+import { RefreshCw, Calendar } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import {
   Chart as ChartJS,
@@ -8,18 +8,23 @@ import {
   LinearScale,
   PointElement,
   LineElement,
+  BarElement,
   Title,
   Tooltip,
   Legend,
   Filler
 } from 'chart.js';
 import { usePeopleCount } from '../context/PeopleCountContext';
+import { useAttendance } from '../context/AttendanceContext';
+import { useCourses } from '../context/CourseContext';
+import { useStudents } from '../context/StudentContext';
 
 ChartJS.register(
   CategoryScale,
   LinearScale,
   PointElement,
   LineElement,
+  BarElement,
   Title,
   Tooltip,
   Legend,
@@ -28,9 +33,16 @@ ChartJS.register(
 
 export default function Dashboard() {
   const { count } = usePeopleCount();
+  const { sessions } = useAttendance();
+  const { courses } = useCourses();
+  const { students } = useStudents();
   const [historicalData, setHistoricalData] = useState<number[]>([]);
   const [timeLabels, setTimeLabels] = useState<string[]>([]);
   const [status, setStatus] = useState({ status: 'active' as const, message: 'System operating normally' });
+  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  
+  // Get today's date in YYYY-MM-DD format
+  const today = new Date().toISOString().split('T')[0];
 
   useEffect(() => {
     // Update historical data every second
@@ -54,10 +66,83 @@ export default function Dashboard() {
         return newLabels.slice(-10); // Keep last 10 labels
       });
     }, 1000);
-
     return () => clearInterval(interval);
   }, [count]);
 
+  // Filter sessions for the selected date
+  const sessionsForSelectedDate = sessions.filter(
+    session => session.date === selectedDate
+  );
+  
+  // Calculate attendance statistics
+  const getAttendanceStats = () => {
+    if (sessionsForSelectedDate.length === 0) {
+      return {
+        totalSessions: 0,
+        totalStudentsPresent: 0,
+        totalStudentsLate: 0,
+        attendanceRate: 0
+      };
+    }
+    
+    const allRecords = sessionsForSelectedDate.flatMap(s => s.records);
+    const uniqueStudents = new Set(allRecords.map(r => r.studentId));
+    const lateStudents = allRecords.filter(r => r.status === 'late');
+    
+    // Attendance rate = unique students present / total students
+    const attendanceRate = students.length > 0 
+      ? Math.round((uniqueStudents.size / students.length) * 100) 
+      : 0;
+    
+    return {
+      totalSessions: sessionsForSelectedDate.length,
+      totalStudentsPresent: uniqueStudents.size,
+      totalStudentsLate: lateStudents.length,
+      attendanceRate
+    };
+  };
+  
+  // Generate course attendance data for chart
+  const getCourseAttendanceData = () => {
+    const courseLabels = courses.map(c => c.name);
+    const presentData = courses.map(course => {
+      const courseSessions = sessionsForSelectedDate.filter(s => s.courseId === course.id);
+      if (courseSessions.length === 0) return 0;
+      
+      const uniquePresentStudents = new Set();
+      courseSessions.forEach(session => {
+        session.records.forEach(record => {
+          if (record.status === 'present' || record.status === 'late') {
+            uniquePresentStudents.add(record.studentId);
+          }
+        });
+      });
+      
+      return uniquePresentStudents.size;
+    });
+    
+    const lateData = courses.map(course => {
+      const courseSessions = sessionsForSelectedDate.filter(s => s.courseId === course.id);
+      if (courseSessions.length === 0) return 0;
+      
+      const uniqueLateStudents = new Set();
+      courseSessions.forEach(session => {
+        session.records.forEach(record => {
+          if (record.status === 'late') {
+            uniqueLateStudents.add(record.studentId);
+          }
+        });
+      });
+      
+      return uniqueLateStudents.size;
+    });
+    
+    return { courseLabels, presentData, lateData };
+  };
+  
+  const stats = getAttendanceStats();
+  const { courseLabels, presentData, lateData } = getCourseAttendanceData();
+  
   const chartData = {
     labels: timeLabels,
     datasets: [
@@ -71,7 +156,23 @@ export default function Dashboard() {
       }
     ]
   };
-
+  
+  const attendanceChartData = {
+    labels: courseLabels,
+    datasets: [
+      {
+        label: 'Present',
+        data: presentData,
+        backgroundColor: 'rgba(34, 197, 94, 0.7)',
+      },
+      {
+        label: 'Late',
+        data: lateData,
+        backgroundColor: 'rgba(234, 179, 8, 0.7)',
+      }
+    ]
+  };
+  
   const chartOptions = {
     responsive: true,
     maintainAspectRatio: false,
@@ -104,6 +205,41 @@ export default function Dashboard() {
       }
     }
   };
+  
+  const attendanceChartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'top' as const,
+        labels: {
+          color: 'rgba(255, 255, 255, 0.7)'
+        }
+      },
+    },
+    scales: {
+      y: {
+        beginAtZero: true,
+        grid: {
+          color: 'rgba(255, 255, 255, 0.1)'
+        },
+        ticks: {
+          color: 'rgba(255, 255, 255, 0.7)'
+        }
+      },
+      x: {
+        grid: {
+          color: 'rgba(255, 255, 255, 0.1)'
+        },
+        ticks: {
+          color: 'rgba(255, 255, 255, 0.7)',
+          autoSkip: false,
+          maxRotation: 45,
+          minRotation: 45
+        }
+      }
+    }
+  };
 
   const handleRefresh = () => {
     // Implement refresh logic here
@@ -121,7 +257,7 @@ export default function Dashboard() {
           <RefreshCw size={20} />
         </button>
       </div>
-
+      
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
         <div className="bg-gray-800 p-6 rounded-lg">
           <h2 className="text-lg font-semibold mb-2">Current Count</h2>
@@ -153,12 +289,64 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-
-      <div className="bg-gray-800 p-6 rounded-lg">
+      
+      <div className="bg-gray-800 p-6 rounded-lg mb-6">
         <h2 className="text-lg font-semibold mb-4">Count Trend (Last 10 minutes)</h2>
-        <div className="h-[400px]">
+        <div className="h-[300px]">
           <Line data={chartData} options={chartOptions} />
         </div>
+      </div>
+      
+      {/* Attendance Section */}
+      <div className="mb-6">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-bold">Attendance Dashboard</h2>
+          <div className="flex items-center space-x-2">
+            <Calendar size={18} />
+            <input
+              type="date"
+              value={selectedDate}
+              max={today}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white"
+            />
+          </div>
+        </div>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+        <div className="bg-gray-800 p-6 rounded-lg">
+          <h3 className="text-sm uppercase text-gray-400 mb-2">Total Sessions</h3>
+          <div className="text-3xl font-bold text-blue-500">{stats.totalSessions}</div>
+        </div>
+        
+        <div className="bg-gray-800 p-6 rounded-lg">
+          <h3 className="text-sm uppercase text-gray-400 mb-2">Students Present</h3>
+          <div className="text-3xl font-bold text-green-500">{stats.totalStudentsPresent}</div>
+        </div>
+        
+        <div className="bg-gray-800 p-6 rounded-lg">
+          <h3 className="text-sm uppercase text-gray-400 mb-2">Late Arrivals</h3>
+          <div className="text-3xl font-bold text-yellow-500">{stats.totalStudentsLate}</div>
+        </div>
+        
+        <div className="bg-gray-800 p-6 rounded-lg">
+          <h3 className="text-sm uppercase text-gray-400 mb-2">Attendance Rate</h3>
+          <div className="text-3xl font-bold text-purple-500">{stats.attendanceRate}%</div>
+        </div>
+      </div>
+      
+      <div className="bg-gray-800 p-6 rounded-lg">
+        <h2 className="text-lg font-semibold mb-4">Course Attendance</h2>
+        {courses.length > 0 ? (
+          <div className="h-[400px]">
+            <Bar data={attendanceChartData} options={attendanceChartOptions} />
+          </div>
+        ) : (
+          <div className="text-center text-gray-400 py-10">
+            No courses available. Add courses to see attendance data.
+          </div>
+        )}
       </div>
     </div>
   );

@@ -195,3 +195,9 @@ Use JavaScript to handle dynamic updates (e.g., live feed, count, error notifica
 
 Mock backend data (e.g., JSON) for testing purposes.
 
+
+
+how can i implement Attendance Tracking:
+
+Automated Attendance Logging: Use facial recognition (with student consent and proper privacy measures) to automatically log student attendance as they enter the classroom.
+Attendance Reports: Generate attendance reports for each class, showing which students were present, absent, or late.
