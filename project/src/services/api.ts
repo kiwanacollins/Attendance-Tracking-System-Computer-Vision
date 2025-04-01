@@ -12,11 +12,19 @@ let socket: Socket | null = null;
 const initializeSocket = (onConnect?: () => void): Socket => {
   if (socket) return socket;
 
+  // Check if in offline mode
+  const isOfflineMode = localStorage.getItem('offline-mode') === 'true';
+  if (isOfflineMode) {
+    console.log('App is in offline mode, skipping socket connection');
+    // Return a dummy socket to prevent errors
+    return createOfflineSocket();
+  }
+
   console.log('Attempting to connect to Socket.IO server at:', SOCKET_URL);
 
   socket = io(SOCKET_URL, {
     reconnectionAttempts: 5,
-    timeout: 15000,
+    timeout: 5000, // Reduced from 15000
     transports: ['websocket', 'polling'],
     reconnectionDelay: 2000,
     reconnectionDelayMax: 10000
@@ -24,6 +32,7 @@ const initializeSocket = (onConnect?: () => void): Socket => {
 
   socket.on('connect', () => {
     console.log('Socket connected:', socket?.id);
+    localStorage.removeItem('offline-mode'); // Clear offline mode flag on successful connection
     if (onConnect) onConnect();
   });
 
@@ -35,11 +44,27 @@ const initializeSocket = (onConnect?: () => void): Socket => {
     console.error('Socket connection error:', error);
     if (socket && socket.io && socket.io.attempts === 5) {
       console.warn('Multiple failed connection attempts. Backend server may be unavailable.');
+      localStorage.setItem('offline-mode', 'true'); // Set offline mode flag
     }
   });
 
   return socket;
 };
+
+// Create a dummy socket for offline mode
+function createOfflineSocket() {
+  const dummySocket = {
+    id: 'offline-socket',
+    connected: false,
+    on: () => dummySocket,
+    emit: () => false,
+    disconnect: () => {},
+    connect: () => {},
+    io: { attempts: 0 }
+  } as unknown as Socket;
+  
+  return dummySocket;
+}
 
 // Improved API request function with better error handling and offline fallback
 const apiRequest = async <T>(

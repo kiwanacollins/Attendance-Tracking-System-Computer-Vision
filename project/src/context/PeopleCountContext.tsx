@@ -244,7 +244,7 @@ export function PeopleCountProvider({ children }: { children: ReactNode }) {
     let connectionTimeoutId: number;
     let retryCount = 0;
     const maxRetries = 3;
-    const timeoutPeriod = 15000; // Increase to 15 seconds
+    const timeoutPeriod = 5000; // Reduce to 5 seconds from 15 seconds
     
     const attemptConnection = () => {
       try {
@@ -264,6 +264,9 @@ export function PeopleCountProvider({ children }: { children: ReactNode }) {
             dispatch({ type: 'SET_ONLINE_STATUS', payload: false });
             // Try to load data from localStorage
             loadFromLocalStorage();
+            
+            // Continue with the app in offline mode
+            setUseOfflineMode();
           }
         }, timeoutPeriod);
         
@@ -352,6 +355,7 @@ export function PeopleCountProvider({ children }: { children: ReactNode }) {
         console.error('Error initializing socket connection:', error);
         dispatch({ type: 'SET_ONLINE_STATUS', payload: false });
         loadFromLocalStorage();
+        setUseOfflineMode();
       }
     };
     
@@ -385,8 +389,24 @@ export function PeopleCountProvider({ children }: { children: ReactNode }) {
       }
     };
     
-    // Start connection attempt
-    attemptConnection();
+    // Helper function to force offline mode
+    const setUseOfflineMode = () => {
+      console.log('Setting app to work in offline mode');
+      // Set a flag in localStorage to remember we're in offline mode
+      localStorage.setItem('offline-mode', 'true');
+      dispatch({ type: 'SET_ONLINE_STATUS', payload: false });
+    };
+    
+    // Check if we're already in offline mode from a previous session
+    const isOfflineMode = localStorage.getItem('offline-mode') === 'true';
+    if (isOfflineMode) {
+      console.log('Starting in offline mode based on previous session');
+      dispatch({ type: 'SET_ONLINE_STATUS', payload: false });
+      loadFromLocalStorage();
+    } else {
+      // Start connection attempt only if not in offline mode
+      attemptConnection();
+    }
   }, []);
   
   // Initial data loading from API

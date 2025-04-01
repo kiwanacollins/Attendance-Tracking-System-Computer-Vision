@@ -18,8 +18,8 @@ const MOTION_FRAMES_REQUIRED = 3;
 // Performance optimization flags for Raspberry Pi
 let model: cocossd.ObjectDetection | null = null;
 let isModelLoading = false;
-let previousPixels: ImageData | null = null;
-let motionDetectedFrames = 0;
+const previousPixels: ImageData | null = null;
+const motionDetectedFrames = 0;
 
 export default function LiveFeed() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -48,6 +48,7 @@ export default function LiveFeed() {
   // Track available cameras
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [waitingForUserInteraction, setWaitingForUserInteraction] = useState(false);
+  const [isOfflineMode, setIsOfflineMode] = useState(localStorage.getItem('offline-mode') === 'true');
   
   // Get current location for capacity information
   const currentLocation = useMemo(() => {
@@ -101,195 +102,225 @@ export default function LiveFeed() {
   }, []);
 
   // Create a safe play function with retry logic
-  const safePlay = useCallback(async (video: HTMLVideoElement, maxRetries = 5): Promise<void> => {
+  const safePlay = useCallback(async (video: HTMLVideoElement, maxRetries = 3): Promise<void | (() => void)> => {
     let retryCount = 0;
     
-    while (retryCount < maxRetries) {
+    const attemptPlay = async () => {
       try {
-        // Check if component is still mounted and video element still exists
-        if (!isMounted.current) {
-          console.log('Component unmounted, aborting video play');
+        console.log('Attempting to play video...');
+        await video.play();
+        console.log('Video playback started successfully');
+        return true;
+      } catch (err) {
+        console.error('Video play error:', err);
+        return false;
+      }
+    };
+    
+    // First direct attempt
+    if (await attemptPlay()) {
+      setWaitingForUserInteraction(false);
+      return;
+    }
+    
+    // If first attempt fails, try with user interaction or timeout
+    console.log('First play attempt failed, showing user interaction prompt');
+    setWaitingForUserInteraction(true);
+    
+    // Fallback: try at regular intervals (only in development mode)
+    if (process.env.NODE_ENV === 'development') {
+      const intervalId = setInterval(async () => {
+        if (retryCount >= maxRetries) {
+          clearInterval(intervalId);
           return;
         }
         
-        if (!video || !document.body.contains(video)) {
-          throw new Error('Video element no longer in DOM');
-        }
+        retryCount++;
+        console.log(`Auto-retry ${retryCount}/${maxRetries}...`);
         
-        // Try to play
-        await video.play();
-        
-        // Only update state if still mounted
-        if (isMounted.current) {
+        if (await attemptPlay()) {
+          clearInterval(intervalId);
           setWaitingForUserInteraction(false);
         }
-        return;
-      } catch (err) {
-        retryCount++;
-        console.log(`Retry ${retryCount} of ${maxRetries} for video play:`, err);
-        
-        // Don't retry if component is unmounted
-        if (!isMounted.current) {
-          return;
-        }
-        
-        if (retryCount >= maxRetries) {
-          if (isMounted.current) {
-            setWaitingForUserInteraction(true);
-          }
-          throw err;
-        }
-        
-        // Wait a bit longer between retries
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
+      }, 1000);
+      
+      // Clear interval on component unmount
+      return () => {
+        clearInterval(intervalId);
+      };
     }
   }, []);
 
-  // Start the camera stream with optimized settings for Raspberry Pi
-  const startStream = useCallback(async () => {
-    if (!videoRef.current || !isMounted.current) return;
+  // Always render video regardless of detection
+  const renderVideoOnly = useCallback(() => {
+    if (!videoRef.current || !canvasRef.current) return;
+    
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d', { 
+      alpha: false,
+      willReadFrequently: true 
+    });
+    
+    if (!ctx) return;
+    
+    // Ensure canvas has proper dimensions
+    if (canvas.width < 10 || canvas.height < 10) {
+      canvas.width = 640;
+      canvas.height = 480;
+    }
+    
+    // Always draw the video frame, even if dimensions not detected
+    try {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    } catch (error) {
+      // This can happen if video element isn't fully initialized
+      console.warn("Could not render video frame:", error);
+    }
+  }, []);
+
+  // Minimal direct camera display function
+  const startCamera = useCallback(async () => {
+    console.clear(); // Clear previous logs
+    console.log("=== Starting camera with simpler approach ===");
+    
+    if (!videoRef.current) {
+      console.error("No video element found");
+      return;
+    }
     
     try {
       setIsLoadingStream(true);
       setError(null);
       
-      // Get user preferences from localStorage
-      const streamConfig = JSON.parse(localStorage.getItem('stream-config') || '{}');
-      const preferredDevice = streamConfig.deviceId || 'default';
-      
-      // Optimized constraints for Raspberry Pi performance
-      const constraints = {
-        video: {
-          deviceId: preferredDevice !== 'default' ? preferredDevice : undefined,
-          width: { ideal: lowPowerMode ? 640 : 1280 },
-          height: { ideal: lowPowerMode ? 480 : 720 },
-          frameRate: { ideal: lowPowerMode ? 15 : 30 }
-        }
-      };
-      
-      // Make sure any previous stream is properly stopped
+      // Stop any existing stream
       if (videoRef.current.srcObject) {
-        const oldStream = videoRef.current.srcObject as MediaStream;
-        oldStream.getTracks().forEach(track => track.stop());
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
         videoRef.current.srcObject = null;
       }
-
-      // First check if getUserMedia is supported
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('getUserMedia is not supported in this browser');
+      
+      console.log("Requesting camera with minimal constraints");
+      const simpleConstraints = {
+        video: true,
+        audio: false
+      };
+      
+      // Request camera access
+      const stream = await navigator.mediaDevices.getUserMedia(simpleConstraints);
+      console.log("Camera access granted");
+      
+      // Get track settings immediately
+      const videoTrack = stream.getVideoTracks()[0];
+      const settings = videoTrack.getSettings();
+      console.log("Track settings:", settings);
+      
+      // Use track settings directly - they're more reliable than waiting for video.videoWidth/Height
+      const finalWidth = settings.width || 640;
+      const finalHeight = settings.height || 480;
+      
+      console.log(`Using dimensions from track: ${finalWidth}x${finalHeight}`);
+      
+      // Set canvas dimensions based on track settings
+      if (canvasRef.current) {
+        canvasRef.current.width = finalWidth;
+        canvasRef.current.height = finalHeight;
       }
       
-      // Get camera devices
-      await getVideoDevices();
-      
-      // Check if still mounted after async operation
-      if (!isMounted.current) return;
-      
-      // Request camera access with a timeout to prevent hanging
-      const streamPromise = navigator.mediaDevices.getUserMedia(constraints);
-      const timeoutPromise = new Promise<MediaStream>((_, reject) => {
-        setTimeout(() => reject(new Error('Camera access timed out after 10 seconds')), 10000);
+      // Update resolution state with track settings
+      setResolution({
+        width: finalWidth,
+        height: finalHeight
       });
       
-      const stream = await Promise.race([streamPromise, timeoutPromise]);
-      
-      // Check if component is still mounted and video ref exists
-      if (!isMounted.current || !videoRef.current) return;
-      
-      // Set the stream
+      // Attach stream to video element
       videoRef.current.srcObject = stream;
       
-      // Set up proper event handlers
+      // Set up event listeners with simpler approach
       videoRef.current.onloadedmetadata = () => {
-        console.log('Video metadata loaded successfully');
+        console.log("Video metadata loaded");
         
-        if (!videoRef.current || !isMounted.current) return;
-        
-        // Update resolution once metadata is loaded
-        if (videoRef.current.videoWidth && videoRef.current.videoHeight) {
-          setResolution({
-            width: videoRef.current.videoWidth,
-            height: videoRef.current.videoHeight
-          });
-        }
-        
-        // Try to play after metadata is loaded
-        safePlay(videoRef.current)
+        // Play immediately without waiting for dimensions
+        videoRef.current?.play()
           .then(() => {
-            if (isMounted.current) {
-              console.log('Video playing successfully');
-              setIsStreaming(true);
-              setWaitingForUserInteraction(false);
-            }
+            console.log("Video playing successfully");
+            setIsStreaming(true);
           })
-          .catch((playError) => {
-            if (isMounted.current) {
-              console.error('Error playing video:', playError);
-              console.warn('Auto-play may be blocked by browser. User interaction may be required.');
-              setWaitingForUserInteraction(true);
-            }
+          .catch(error => {
+            console.error("Error playing video:", error);
+            setWaitingForUserInteraction(true);
           });
       };
       
-      // Handle errors
-      videoRef.current.onerror = (e) => {
-        if (isMounted.current) {
-          console.error('Video element error:', e);
-          setError('Error with video playback. Please reload the page.');
+      // Add fallback for play
+      videoRef.current.oncanplay = () => {
+        console.log("Video can play event fired");
+        if (!isStreaming && videoRef.current) {
+          videoRef.current.play()
+            .then(() => {
+              console.log("Video playing from canplay event");
+              setIsStreaming(true);
+            })
+            .catch(err => {
+              console.log("Could not autoplay from canplay event");
+            });
         }
       };
       
-      // Make sure model is loaded regardless of stream success
-      if (!isModelReady && !isModelLoading) {
-        loadModel();
-      }
+    } catch (error: any) {
+      console.error("Camera access failed:", error);
       
-    } catch (streamError) {
-      if (isMounted.current) {
-        console.error('Error starting video stream:', streamError);
-        setError(`Failed to access camera: ${streamError.message || 'Unknown error'}. Please check permissions and try again.`);
-        await getVideoDevices();
+      if (error.name === "NotReadableError") {
+        setError("Camera is in use by another application. Please close other apps using the camera and try again.");
+      } else if (error.name === "NotAllowedError") {
+        setError("Camera access denied. Please allow camera access in your browser settings.");
+      } else {
+        setError(`Could not access camera: ${error.message}. Please check permissions and try again.`);
       }
     } finally {
-      if (isMounted.current) {
-        setIsLoadingStream(false);
-      }
+      setIsLoadingStream(false);
     }
-  }, [isModelReady, loadModel, lowPowerMode, getVideoDevices, safePlay]);
+  }, [isStreaming]);
 
   // Manual play when autoplay is blocked
   const handleManualPlay = useCallback(() => {
     if (!videoRef.current || !isMounted.current) return;
     
+    console.log("Attempting manual play...");
     try {
-      videoRef.current.play()
-        .then(() => {
-          if (isMounted.current) {
-            setIsStreaming(true);
-            setWaitingForUserInteraction(false);
-            
-            // Set resolution after successful play - ensure values exist
-            if (videoRef.current && videoRef.current.videoWidth && videoRef.current.videoHeight) {
-              setResolution({
-                width: videoRef.current.videoWidth,
-                height: videoRef.current.videoHeight
-              });
-            } else {
-              // Fallback values if videoWidth/videoHeight aren't available yet
-              setResolution({
-                width: 640,
-                height: 480
-              });
+      // Add a small delay before attempting to play
+      setTimeout(() => {
+        if (!videoRef.current) return;
+        
+        videoRef.current.play()
+          .then(() => {
+            if (isMounted.current) {
+              console.log("Manual play successful");
+              setIsStreaming(true);
+              setWaitingForUserInteraction(false);
+              
+              // Set resolution after successful play - ensure values exist
+              if (videoRef.current && videoRef.current.videoWidth && videoRef.current.videoHeight) {
+                setResolution({
+                  width: videoRef.current.videoWidth,
+                  height: videoRef.current.videoHeight
+                });
+              } else {
+                // Fallback values if videoWidth/videoHeight aren't available yet
+                setResolution({
+                  width: 640,
+                  height: 480
+                });
+              }
             }
-          }
-        })
-        .catch(err => {
-          if (isMounted.current) {
-            console.error('Manual play failed:', err);
-            setError('Could not start video stream. Please check camera permissions.');
-          }
-        });
+          })
+          .catch(err => {
+            if (isMounted.current) {
+              console.error('Manual play failed:', err);
+              setError('Could not start video stream. Please check camera permissions.');
+            }
+          });
+      }, 100);
     } catch (err) {
       if (isMounted.current) {
         console.error('Manual play exception:', err);
@@ -352,220 +383,172 @@ export default function LiveFeed() {
     return diffCount / samplesToCheck;
   }, [lowPowerMode]);
 
-  // Process video frames for object detection
+  // Directly render video from constraints rather than using DOM dimensions
   const processVideoFrame = useCallback(async () => {
     // Add additional checks to ensure we have everything we need
-    if (!isModelReady || !isStreaming || isPaused || !model || !videoRef.current || !canvasRef.current || !isMounted.current) {
+    if (!model || !videoRef.current || !canvasRef.current || !isMounted.current) {
       return;
     }
     
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { 
+      alpha: false, // Use false for better performance
+      willReadFrequently: true
+    });
     
     if (!ctx) return;
     
     try {
-      // Safety check for video dimensions
-      if (!video.videoWidth || !video.videoHeight) {
-        console.warn('Video dimensions not available yet');
+      // Always use the resolution from our state - don't rely on videoWidth/videoHeight
+      const useWidth = resolution.width || 640;
+      const useHeight = resolution.height || 480;
+      
+      // Ensure canvas has correct dimensions
+      if (canvas.width !== useWidth || canvas.height !== useHeight) {
+        console.log(`Updating canvas to match resolution: ${useWidth}x${useHeight}`);
+        canvas.width = useWidth;
+        canvas.height = useHeight;
+      }
+      
+      // Always draw video first - this ensures something is displayed
+      try {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      } catch (drawErr) {
+        console.error("Could not draw video frame:", drawErr);
         return;
       }
       
-      // Set canvas dimensions to match video
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      
-      // Draw video frame to canvas
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      
-      // Motion detection for performance optimization
-      const currentImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      let motionLevel = 0;
-      
-      if (previousPixels) {
-        motionLevel = detectMotion(currentImageData, previousPixels);
-        
-        if (isMounted.current) {
-          setMotionLevel(motionLevel);
-        }
-        
-        // Only process frames with sufficient motion in low power mode
-        if (lowPowerMode && motionLevel < MOTION_THRESHOLD) {
-          motionDetectedFrames = 0;
+      // Only attempt detection if we have valid dimensions and model is ready
+      if (canvas.width >= 16 && canvas.height >= 16 && isModelReady && !isPaused) {
+        try {
+          const predictions = await model.detect(video);
           
-          if (isMounted.current) {
-            setIsMotionDetected(false);
-          }
-          
-          previousPixels = currentImageData;
-          
-          // Still draw the video but skip detection
-          ctx.font = '16px Arial';
-          ctx.fillStyle = 'green';
-          ctx.fillText(`Standby - No Motion Detected`, 10, 30);
-          return;
-        } else if (lowPowerMode) {
-          // Count motion frames
-          motionDetectedFrames++;
-          
-          // Only process after consecutive motion frames to avoid false triggers
-          if (motionDetectedFrames < MOTION_FRAMES_REQUIRED) {
-            if (isMounted.current) {
-              setIsMotionDetected(true);
+          // Only clear and redraw if we have detections to show
+          if (predictions && predictions.length > 0) {
+            // Filter for people
+            const peopleDetected = predictions.filter(prediction => 
+              prediction.class === 'person' && prediction.score > CONFIDENCE_THRESHOLD
+            );
+            
+            // Update count
+            setCount(peopleDetected.length);
+            
+            if (peopleDetected.length > 0) {
+              // Draw boxes and labels over the existing frame
+              ctx.font = '16px Arial';
+              ctx.lineWidth = 2;
+              
+              // Draw each detection box
+              peopleDetected.forEach((prediction, index) => {
+                const [x, y, width, height] = prediction.bbox;
+                
+                // Different colors based on confidence
+                if (prediction.score > 0.8) {
+                  ctx.strokeStyle = '#00FF00'; // Green for high confidence
+                } else if (prediction.score > 0.6) {
+                  ctx.strokeStyle = '#FFFF00'; // Yellow for medium confidence
+                } else {
+                  ctx.strokeStyle = '#FF9900'; // Orange for lower confidence
+                }
+                
+                // Draw bounding box
+                ctx.beginPath();
+                ctx.rect(x, y, width, height);
+                ctx.stroke();
+                
+                // Draw label background
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(x, y - 25, 120, 25);
+                
+                // Draw label text
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillText(`Person ${index + 1}: ${Math.round(prediction.score * 100)}%`, x + 5, y - 7);
+              });
+              
+              // Display UI information on canvas
+              ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+              ctx.fillRect(10, 10, 200, 90);
+              
+              ctx.fillStyle = 'white';
+              ctx.fillText(`Count: ${peopleDetected.length}`, 20, 30);
+              ctx.fillText(`FPS: ${Math.round(fps)}`, 20, 50);
+              
+              // Display capacity information
+              if (currentLocation) {
+                const capacityPercentage = (peopleDetected.length / currentLocation.capacity) * 100;
+                let capacityColor = '#00FF00'; // Green by default
+                
+                if (capacityPercentage > 90) {
+                  capacityColor = '#FF0000'; // Red when near capacity
+                } else if (capacityPercentage > 70) {
+                  capacityColor = '#FFFF00'; // Yellow when getting full
+                }
+                
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(canvas.width - 210, 10, 200, 50);
+                
+                ctx.fillStyle = capacityColor;
+                ctx.fillText(`Location: ${currentLocation.name}`, canvas.width - 200, 30);
+                ctx.fillText(`Capacity: ${peopleDetected.length}/${currentLocation.capacity}`, canvas.width - 200, 50);
+              }
             }
-            
-            previousPixels = currentImageData;
-            
-            ctx.font = '16px Arial';
-            ctx.fillStyle = 'yellow';
-            ctx.fillText(`Motion Detected - Preparing...`, 10, 30);
-            return;
           }
-          
-          if (isMounted.current) {
-            setIsMotionDetected(true);
-          }
+        } catch (detectErr) {
+          console.error("Detection error:", detectErr);
         }
-      }
-      
-      previousPixels = currentImageData;
-      
-      // Record start time for performance monitoring
-      const startTime = performance.now();
-      
-      // Check again if component is still mounted
-      if (!isMounted.current) return;
-      
-      // Perform detection
-      const predictions = await model.detect(video);
-      
-      // Check again if component is still mounted after async operation
-      if (!isMounted.current) return;
-      
-      // Record processing time
-      const endTime = performance.now();
-      const processingTime = endTime - startTime;
-      
-      // Update performance metrics
-      const newProcessingTimes = [...processingTimes, processingTime].slice(-10); // Keep last 10
-      setProcessingTimes(newProcessingTimes);
-      
-      // Calculate FPS based on frame interval and processing time
-      const currentFps = 1000 / (processingTime + (performance.now() - lastFrameTime));
-      setFps(Math.round(currentFps));
-      
-      // Draw bounding boxes
-      const peopleDetected = predictions.filter(prediction => 
-        prediction.class === 'person' && prediction.score > CONFIDENCE_THRESHOLD
-      );
-      
-      // Draw boxes and labels
-      ctx.font = '16px Arial';
-      ctx.lineWidth = 2;
-      
-      // Update global count
-      setCount(peopleDetected.length);
-      
-      // Draw each detection box
-      peopleDetected.forEach((prediction, index) => {
-        const [x, y, width, height] = prediction.bbox;
-        
-        // Different colors based on confidence
-        if (prediction.score > 0.8) {
-          ctx.strokeStyle = '#00FF00'; // Green for high confidence
-        } else if (prediction.score > 0.6) {
-          ctx.strokeStyle = '#FFFF00'; // Yellow for medium confidence
-        } else {
-          ctx.strokeStyle = '#FF9900'; // Orange for lower confidence
-        }
-        
-        // Draw bounding box
-        ctx.beginPath();
-        ctx.rect(x, y, width, height);
-        ctx.stroke();
-        
-        // Draw label background
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-        ctx.fillRect(x, y - 25, 120, 25);
-        
-        // Draw label text
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillText(`Person ${index + 1}: ${Math.round(prediction.score * 100)}%`, x + 5, y - 7);
-      });
-      
-      // Display UI information on canvas
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-      ctx.fillRect(10, 10, 200, 90);
-      
-      ctx.fillStyle = 'white';
-      ctx.fillText(`Count: ${peopleDetected.length}`, 20, 30);
-      ctx.fillText(`FPS: ${Math.round(fps)}`, 20, 50);
-      ctx.fillText(`Process Time: ${Math.round(processingTime)}ms`, 20, 70);
-      ctx.fillText(`Motion: ${Math.round(motionLevel * 100)}%`, 20, 90);
-      
-      // Display capacity information
-      if (currentLocation) {
-        const capacityPercentage = (peopleDetected.length / currentLocation.capacity) * 100;
-        let capacityColor = '#00FF00'; // Green by default
-        
-        if (capacityPercentage > 90) {
-          capacityColor = '#FF0000'; // Red when near capacity
-        } else if (capacityPercentage > 70) {
-          capacityColor = '#FFFF00'; // Yellow when getting full
-        }
-        
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-        ctx.fillRect(canvas.width - 210, 10, 200, 50);
-        
-        ctx.fillStyle = capacityColor;
-        ctx.fillText(`Location: ${currentLocation.name}`, canvas.width - 200, 30);
-        ctx.fillText(`Capacity: ${peopleDetected.length}/${currentLocation.capacity}`, canvas.width - 200, 50);
-      }
-      
-      // Update last frame time for better FPS calculation
-      if (isMounted.current) {
-        setLastFrameTime(performance.now());
       }
     } catch (err) {
       console.error('Error processing video frame:', err);
     }
   }, [
-    isModelReady, 
-    isStreaming, 
-    isPaused, 
-    detectMotion, 
-    lowPowerMode, 
-    processingTimes, 
-    lastFrameTime, 
+    model,
+    resolution, 
     fps, 
     setCount, 
-    currentLocation
+    currentLocation,
+    isModelReady,
+    isPaused
   ]);
   
-  // Setup the detection loop
+  // Setup animation frame loop with more reliable rendering
   useEffect(() => {
     let frameId: number;
     let lastProcessTime = 0;
+    const DETECTION_INTERVAL = 1000; // Process once per second to reduce performance impact
     
     const processFrame = async (timestamp: number) => {
-      // Check if component is still mounted
-      if (!isMounted.current) return;
+      // Always request next frame FIRST to ensure smooth display
+      frameId = requestAnimationFrame(processFrame);
       
-      if (timestamp - lastProcessTime > FRAME_INTERVAL) {
-        await processVideoFrame();
-        lastProcessTime = timestamp;
+      // Skip processing if component unmounted
+      if (!isMounted.current || !videoRef.current) return;
+      
+      // Always try to render the video feed (even if dimensions are invalid)
+      if (isStreaming && !isPaused) {
+        renderVideoOnly();
       }
       
-      // Only continue the animation loop if component is still mounted
-      if (isMounted.current) {
-        frameId = requestAnimationFrame(processFrame);
+      // Only run object detection at specified intervals if dimensions are valid
+      if (timestamp - lastProcessTime > DETECTION_INTERVAL && 
+          isModelReady && 
+          !isPaused && 
+          videoRef.current.videoWidth > 10 && 
+          videoRef.current.videoHeight > 10) {
+        try {
+          await processVideoFrame();
+          lastProcessTime = timestamp;
+        } catch (err) {
+          console.error("Error in detection loop:", err);
+          // Don't update lastProcessTime on error to allow retry on next interval
+        }
       }
     };
     
-    if (isModelReady && isStreaming && !isPaused) {
+    if (isStreaming) {
+      // Start the animation loop
       frameId = requestAnimationFrame(processFrame);
+      console.log("Started animation frame loop");
     }
     
     return () => {
@@ -573,20 +556,41 @@ export default function LiveFeed() {
         cancelAnimationFrame(frameId);
       }
     };
-  }, [isModelReady, isStreaming, isPaused, processVideoFrame]);
+  }, [isModelReady, isStreaming, isPaused, processVideoFrame, renderVideoOnly]);
   
-  // Initialize camera stream on component mount
+  // Initialize camera stream on component mount with error handling
   useEffect(() => {
     isMounted.current = true;
     
-    loadModel();
-    startStream();
+    // Check if we're in offline mode
+    const offlineMode = localStorage.getItem('offline-mode') === 'true';
+    setIsOfflineMode(offlineMode);
+    
+    // First load the model
+    const init = async () => {
+      try {
+        await loadModel();
+        console.log("Model loaded successfully");
+        
+        // Then start the camera with a delay to ensure model is ready
+        setTimeout(() => {
+          if (isMounted.current) {
+            startCamera();
+          }
+        }, 500);
+      } catch (error) {
+        console.error("Error initializing:", error);
+      }
+    };
+    
+    // Start initialization
+    init();
     
     return () => {
       isMounted.current = false;
       stopStream();
     };
-  }, [loadModel, startStream, stopStream]);
+  }, [loadModel, startCamera, stopStream]);
   
   // Effect to restart the stream when lowPowerMode changes
   useEffect(() => {
@@ -596,7 +600,7 @@ export default function LiveFeed() {
       // Use a timeout to ensure the previous stream is fully stopped
       const timeoutId = setTimeout(() => {
         if (isMounted.current) {
-          startStream();
+          startCamera();
         }
       }, 500);
       
@@ -604,7 +608,7 @@ export default function LiveFeed() {
         clearTimeout(timeoutId);
       };
     }
-  }, [lowPowerMode, stopStream, startStream, isStreaming]);
+  }, [lowPowerMode, stopStream, startCamera, isStreaming]);
   
   return (
     <div className="h-full flex flex-col">
@@ -612,6 +616,9 @@ export default function LiveFeed() {
         <h1 className="text-xl font-semibold text-white">Live Video Feed</h1>
         <div className="flex space-x-4">
           <StatusBadge count={count} capacity={currentLocation?.capacity || 0} />
+          {isOfflineMode && (
+            <div className="bg-yellow-600 text-white px-2 py-1 rounded text-xs">Offline Mode</div>
+          )}
           <Link to="/config" className="p-2 bg-gray-700 rounded-md hover:bg-gray-600 text-white">
             <Settings size={20} />
           </Link>
@@ -625,19 +632,38 @@ export default function LiveFeed() {
           </div>
         )}
         
-        <div className="relative w-full max-w-4xl mx-auto">
-          {/* Hidden Video Element */}
+        <div className="relative w-full max-w-4xl mx-auto bg-black" style={{ minHeight: "480px" }}>
+          {/* Video Element - Always visible and correctly sized */}
           <video
             ref={videoRef}
-            className={`${isStreaming ? 'hidden' : 'block'} w-full h-auto mx-auto bg-black`}
+            className="block w-full mx-auto" 
             playsInline
             muted
+            style={{ 
+              minHeight: '480px',
+              minWidth: '640px',
+              objectFit: 'contain',
+              backgroundColor: 'black',
+              position: 'relative',
+              zIndex: 1,
+              display: 'block' // Ensure video is always displayed
+            }}
           />
           
-          {/* Canvas for drawing detection */}
+          {/* Canvas element - Transparent overlay for detection drawing */}
           <canvas
             ref={canvasRef}
-            className={`${isStreaming ? 'block' : 'hidden'} w-full h-auto mx-auto bg-black`}
+            width="640"
+            height="480"
+            className="absolute top-0 left-0 w-full"
+            style={{ 
+              display: isStreaming ? 'block' : 'none',
+              pointerEvents: 'none',
+              zIndex: 2,
+              minHeight: '480px',
+              minWidth: '640px',
+              backgroundColor: 'transparent'
+            }}
           />
           
           {/* Loading state */}
@@ -671,7 +697,7 @@ export default function LiveFeed() {
         <div className="mt-4 w-full max-w-4xl flex flex-wrap justify-between">
           <div className="flex gap-2 mb-3">
             <button
-              onClick={isStreaming ? stopStream : startStream}
+              onClick={isStreaming ? stopStream : startCamera}
               className={`px-4 py-2 rounded-md flex items-center ${
                 isStreaming ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'
               } text-white`}
