@@ -1,47 +1,61 @@
 import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { Camera, BarChart2, Settings, AlertCircle, ClipboardList } from 'lucide-react';
+import { Link, Outlet, useLocation } from 'react-router-dom';
+import { Camera, BarChart2, Settings, List, AlertTriangle } from 'lucide-react';
+import OfflineIndicator from './OfflineIndicator';
 
+// Navigation items
 const navItems = [
-  { path: '/', icon: Camera, label: 'Live Feed' },
-  { path: '/dashboard', icon: BarChart2, label: 'Dashboard' },
-  { path: '/config', icon: Settings, label: 'Configuration' },
-  { path: '/logs', icon: ClipboardList, label: 'Logs' },
-  { path: '/errors', icon: AlertCircle, label: 'Errors' },
+  { path: '/', label: 'Live Feed', icon: Camera },
+  { path: '/dashboard', label: 'Dashboard', icon: BarChart2 },
+  { path: '/config', label: 'Settings', icon: Settings },
+  { path: '/logs', label: 'Logs', icon: List },
+  { path: '/errors', label: 'System Alerts', icon: AlertTriangle }
 ];
 
-export default function Layout({ children }: { children: React.ReactNode }) {
+export default function Layout({ children }: { children?: React.ReactNode }) {
   const location = useLocation();
-
+  
   return (
-    <div className="flex h-screen bg-gray-900">
-      <nav className="w-64 bg-gray-800">
-        <div className="flex flex-col h-full">
-          <div className="flex items-center justify-center h-16 bg-gray-900">
-            <Camera className="w-8 h-8 text-blue-500" />
-            <span className="ml-2 text-xl font-bold text-white">Automated Counting Camera</span>
-          </div>
-          <div className="flex-1 px-4 py-6">
-            {navItems.map(({ path, icon: Icon, label }) => (
-              <Link
-                key={path}
-                to={path}
-                className={`flex items-center px-4 py-3 mb-2 rounded-lg transition-colors ${
-                  location.pathname === path
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-300 hover:bg-gray-700'
-                }`}
-              >
-                <Icon className="w-5 h-5 mr-3" />
-                {label}
-              </Link>
-            ))}
-          </div>
+    <div className="flex h-screen bg-gray-900 text-white">
+      {/* Sidebar */}
+      <aside className="w-16 md:w-64 bg-gray-800 border-r border-gray-700">
+        <div className="px-4 py-6 text-center hidden md:block">
+          <h1 className="text-xl font-bold">Attendance Tracker</h1>
         </div>
-      </nav>
-      <main className="flex-1 overflow-auto">
-        {children}
-      </main>
+        <div className="md:hidden p-4 flex justify-center">
+          <Camera size={28} />
+        </div>
+        <nav className="mt-6">
+          <ul>
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = location.pathname === item.path || 
+                (item.path !== '/' && location.pathname.startsWith(item.path));
+                
+              return (
+                <li key={item.path} className="mb-2">
+                  <Link
+                    to={item.path}
+                    className={`
+                      flex items-center px-4 py-3 text-gray-400 hover:bg-gray-700 hover:text-white transition-colors rounded-lg
+                      ${isActive ? 'bg-gray-700 text-blue-400' : ''}
+                    `}
+                  >
+                    <Icon size={20} className="flex-shrink-0" />
+                    <span className="ml-3 hidden md:block">{item.label}</span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+      </aside>
+      
+      {/* Main content */}
+      <div className="flex-1 overflow-auto">
+        <Outlet />
+        <OfflineIndicator />
+      </div>
     </div>
   );
 }

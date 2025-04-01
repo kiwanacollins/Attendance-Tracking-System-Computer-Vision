@@ -1,0 +1,17 @@
+[Unit]
+Description=Attendance Tracking System API
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/node /home/pi/attendance-tracking/backend/src/index.js
+WorkingDirectory=/home/pi/attendance-tracking/backend
+Restart=always
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=attendance-api
+User=pi
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
