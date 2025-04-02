@@ -546,6 +546,12 @@ export function PeopleCountProvider({ children }: { children: ReactNode }) {
 
   const removeLocation = useCallback(async (locationId: string) => {
     try {
+      // Special handling for the default location
+      if (locationId === 'default') {
+        console.log('Cannot delete the default location as it is required by the system.');
+        return;
+      }
+      
       if (state.isOnline) {
         // Delete via API if online
         await apiService.locations.delete(locationId);

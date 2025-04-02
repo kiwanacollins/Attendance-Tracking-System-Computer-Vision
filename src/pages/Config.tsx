@@ -38,7 +38,12 @@ const LocationItem = memo(({ location, isActive, onEdit, onDelete, onSelect }) =
   <div className={`p-4 rounded-lg border ${isActive ? 'border-blue-500 bg-gray-700' : 'border-gray-700'}`}>
     <div className="flex justify-between items-start">
       <div onClick={onSelect} className="cursor-pointer flex-1">
-        <h3 className="text-lg font-medium">{location.name}</h3>
+        <h3 className="text-lg font-medium">
+          {location.name}
+          {location.id === 'default' && (
+            <span className="ml-2 text-xs bg-gray-600 px-2 py-0.5 rounded">Default</span>
+          )}
+        </h3>
         <div className="flex mt-1 text-sm text-gray-400">
           <span className="mr-4">Capacity: {location.capacity}</span>
           {location.description && (
@@ -58,9 +63,15 @@ const LocationItem = memo(({ location, isActive, onEdit, onDelete, onSelect }) =
         </button>
         <button 
           onClick={onDelete}
-          className="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
-          title="Delete location"
-          disabled={isActive}
+          className={`p-1 ${location.id === 'default' || isActive 
+            ? 'text-gray-600 cursor-not-allowed' 
+            : 'hover:bg-gray-700 text-gray-400 hover:text-white'}`}
+          title={location.id === 'default' 
+            ? "Cannot delete default location" 
+            : isActive 
+              ? "Cannot delete active location" 
+              : "Delete location"}
+          disabled={isActive || location.id === 'default'}
         >
           <X size={16} />
         </button>
@@ -173,7 +184,8 @@ export default function Config() {
     locations, 
     activeLocation, 
     setActiveLocation, 
-    addLocation, 
+    addLocation,
+    updateLocation,
     removeLocation 
   } = usePeopleCount();
   
@@ -246,12 +258,19 @@ export default function Config() {
   };
 
   const handleSaveLocation = (location: LocationData) => {
-    if (editingLocation) {
-      // Remove old location
+    // Special handling for the default location
+    if (editingLocation && editingLocation.id === 'default') {
+      // When editing the default location, preserve its ID
+      const updatedLocation = { ...location, id: 'default' };
+      updateLocation(updatedLocation);
+    } else if (editingLocation) {
+      // For other locations, remove old and add new
       removeLocation(editingLocation.id);
+      addLocation(location);
+    } else {
+      // Adding a new location
+      addLocation(location);
     }
-    // Add the location (new or edited)
-    addLocation(location);
   };
 
   const handleDeleteLocation = (locationId: string) => {
