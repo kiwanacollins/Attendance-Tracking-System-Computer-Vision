@@ -86,6 +86,8 @@ interface PeopleCountContextType {
   updateLocation: (location: LocationData) => void;
   removeLocation: (locationId: string) => void;
   isOnline: boolean;
+  isApiConnected: boolean; // Alias for isOnline
+  isLoadingLogs: boolean; // Flag to show loading state
   refreshData: () => Promise<void>;
 }
 
@@ -104,6 +106,7 @@ const initialState: CountState = {
 export function PeopleCountProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(countReducer, initialState);
   const [previousCount, setPreviousCount] = useState(0);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   
   // Generate status based on count and location capacity
   const getStatus = useCallback((count: number): SystemStatus => {
@@ -185,6 +188,8 @@ export function PeopleCountProvider({ children }: { children: ReactNode }) {
   // Function to reload all data from API - moved up before it's used
   const refreshData = useCallback(async () => {
     try {
+      setIsLoadingLogs(true);
+      
       // Load locations
       const locations = await apiService.locations.getAll();
       dispatch({ type: 'SET_LOCATIONS', payload: locations });
@@ -202,6 +207,7 @@ export function PeopleCountProvider({ children }: { children: ReactNode }) {
       
       // Set online status to true as we successfully loaded data
       dispatch({ type: 'SET_ONLINE_STATUS', payload: true });
+      setIsLoadingLogs(false);
       return true; // Signal success
     } catch (error) {
       console.error('Error loading initial data:', error);
@@ -234,6 +240,7 @@ export function PeopleCountProvider({ children }: { children: ReactNode }) {
       } catch (localError) {
         console.error('Error loading data from localStorage:', localError);
       }
+      setIsLoadingLogs(false);
       return false; // Signal failure
     }
   }, [state.activeLocation]);
@@ -574,6 +581,8 @@ export function PeopleCountProvider({ children }: { children: ReactNode }) {
       updateLocation,
       removeLocation,
       isOnline: state.isOnline,
+      isApiConnected: state.isOnline,
+      isLoadingLogs,
       refreshData
     }}>
       {children}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { usePeopleCount } from '../context/PeopleCountContext';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { Calendar, Clock, UsersRound, Users, ArrowDownRight, ArrowUpRight, BarChart3, PieChart as PieChartIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import StatusBadge from '../components/StatusBadge';
@@ -84,12 +84,14 @@ export default function Dashboard() {
     
     // Filter logs by date range
     const filteredLogs = logs.filter(log => {
+      if (!log || !log.timestamp) return false;
       const logDate = parseISO(log.timestamp);
       return logDate >= startDate && log.location === activeLocation;
     });
     
     // Filter entry/exit by date range
     const filteredEntryExit = entryExitData.filter(record => {
+      if (!record || !record.timestamp) return false;
       const recordDate = parseISO(record.timestamp);
       return recordDate >= startDate && record.location === activeLocation;
     });
@@ -153,6 +155,7 @@ export default function Dashboard() {
     
     // Filter logs by date range and location
     const filteredLogs = logs.filter(log => {
+      if (!log || !log.timestamp) return false;
       const logDate = parseISO(log.timestamp);
       return logDate >= startDate && log.location === activeLocation;
     });
@@ -162,6 +165,7 @@ export default function Dashboard() {
       const hourlyData: Record<string, { hour: string, count: number, time: string }> = {};
       
       filteredLogs.forEach(log => {
+        if (!log || !log.timestamp) return;
         const date = parseISO(log.timestamp);
         const hour = format(date, 'HH:00');
         const timeKey = format(date, 'yyyy-MM-dd HH');
@@ -183,6 +187,7 @@ export default function Dashboard() {
       const dailyData: Record<string, { day: string, count: number, date: string }> = {};
       
       filteredLogs.forEach(log => {
+        if (!log || !log.timestamp) return;
         const date = parseISO(log.timestamp);
         const day = format(date, 'MM/dd');
         const dateKey = format(date, 'yyyy-MM-dd');
@@ -257,6 +262,7 @@ export default function Dashboard() {
   
   // Format time ago from timestamp
   const formatTimeAgo = (timestamp: string) => {
+    if (!timestamp) return 'Unknown';
     const date = parseISO(timestamp);
     
     if (isToday(date)) {
@@ -658,7 +664,7 @@ export default function Dashboard() {
               <div className="space-y-3">
                 {locations.map(location => {
                   // Find the most recent count for this location
-                  const locationLogs = logs.filter(log => log.location === location.id);
+                  const locationLogs = logs.filter(log => log && log.location === location.id);
                   const latestCount = locationLogs.length > 0 ? locationLogs[0].count : 0;
                   const occupancyPercent = Math.round((latestCount / location.capacity) * 100);
                   
