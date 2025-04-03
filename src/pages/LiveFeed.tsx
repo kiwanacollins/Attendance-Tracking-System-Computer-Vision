@@ -788,19 +788,19 @@ export default function LiveFeed() {
                 <span className="font-semibold">{count} detected</span>
               </div>
               
-              <div className="flex items-center">
+              {/* <div className="flex items-center">
                 <RefreshCw className={`w-5 h-5 mr-1 ${fps > 10 ? 'text-green-400' : 'text-yellow-400'}`} />
                 <span className="font-semibold">{fps} FPS</span>
-              </div>
+              </div> */}
               
-              <div className="flex items-center">
+              {/* <div className="flex items-center">
                 <div className={`w-3 h-3 rounded-full mr-2 ${
                   isMotionDetected ? 'bg-green-500 animate-pulse' : 'bg-gray-500'
                 }`} />
                 <span className="font-semibold">
                   {isMotionDetected ? 'Motion' : 'Standby'}
                 </span>
-              </div>
+              </div> */}
             </div>
             
             <div className="mt-2 text-sm text-gray-400">
