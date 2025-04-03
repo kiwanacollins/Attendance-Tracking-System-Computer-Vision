@@ -182,7 +182,7 @@ export default function LiveFeed() {
   // Minimal direct camera display function
   const startCamera = useCallback(async () => {
     console.clear(); // Clear previous logs
-    console.log("=== Starting camera with simpler approach ===");
+    console.log("=== Starting camera with webcam prioritization ===");
     
     if (!videoRef.current) {
       console.error("No video element found");
@@ -200,20 +200,57 @@ export default function LiveFeed() {
         videoRef.current.srcObject = null;
       }
       
-      console.log("Requesting camera with minimal constraints");
-      const simpleConstraints = {
-        video: true,
-        audio: false
+      // First, enumerate available devices to find webcams
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(device => device.kind === 'videoinput');
+      
+      console.log(`Found ${videoDevices.length} video input devices:`, videoDevices);
+      
+      // Attempt to identify external webcams (non-built-in)
+      // External webcams typically don't have "Built-in" or "FaceTime" in their labels
+      const externalWebcams = videoDevices.filter(device => {
+        const label = device.label.toLowerCase();
+        return label && 
+              !label.includes('built-in') && 
+              !label.includes('facetime') && 
+              !label.includes('internal');
+      });
+      
+      console.log(`Identified ${externalWebcams.length} potential external webcams`);
+      
+      // Set up video constraints based on available devices
+      let videoConstraints: MediaTrackConstraints = {
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
       };
       
-      // Request camera access
-      const stream = await navigator.mediaDevices.getUserMedia(simpleConstraints);
+      // If we found external webcams, prioritize the first one
+      if (externalWebcams.length > 0) {
+        console.log("Prioritizing external webcam:", externalWebcams[0].label);
+        videoConstraints.deviceId = { exact: externalWebcams[0].deviceId };
+      } else if (videoDevices.length > 0) {
+        // If no external webcam but we have at least one camera, use that
+        console.log("No external webcam found, using:", videoDevices[0].label);
+        videoConstraints.deviceId = { exact: videoDevices[0].deviceId };
+      }
+      
+      console.log("Using video constraints:", videoConstraints);
+      
+      // Request camera access with our constraints
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints,
+        audio: false
+      });
+      
       console.log("Camera access granted");
       
       // Get track settings immediately
       const videoTrack = stream.getVideoTracks()[0];
       const settings = videoTrack.getSettings();
       console.log("Track settings:", settings);
+      
+      // Get more information about the selected camera
+      console.log("Using camera:", videoTrack.label);
       
       // Use track settings directly - they're more reliable than waiting for video.videoWidth/Height
       const finalWidth = settings.width || 640;
@@ -235,6 +272,7 @@ export default function LiveFeed() {
       
       // Attach stream to video element
       videoRef.current.srcObject = stream;
+      setVideoDevices(videoDevices); // Update available devices in state
       
       // Set up event listeners with simpler approach
       videoRef.current.onloadedmetadata = () => {

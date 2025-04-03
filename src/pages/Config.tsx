@@ -225,20 +225,52 @@ export default function Config() {
   const handleTestCamera = async () => {
     setIsTesting(true);
     try {
-      // Use lower resolution constraints for Raspberry Pi
-      const constraints = { 
-        video: { 
-          deviceId: config.camera,
-          width: { ideal: 640 },
-          height: { ideal: 480 }
-        }
+      // First, enumerate all video devices to find webcams
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(device => device.kind === 'videoinput');
+      
+      console.log(`Found ${videoDevices.length} video input devices:`, videoDevices);
+      
+      // Attempt to identify external webcams (non-built-in)
+      const externalWebcams = videoDevices.filter(device => {
+        const label = device.label.toLowerCase();
+        return label && 
+               !label.includes('built-in') && 
+               !label.includes('facetime') && 
+               !label.includes('internal');
+      });
+      
+      console.log(`Identified ${externalWebcams.length} potential external webcams`);
+      
+      // Set up video constraints based on available devices
+      let videoConstraints: MediaTrackConstraints = {
+        width: { ideal: 640 },
+        height: { ideal: 480 }
       };
       
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      // If we found external webcams, prioritize the first one
+      if (externalWebcams.length > 0) {
+        console.log("Prioritizing external webcam:", externalWebcams[0].label);
+        videoConstraints.deviceId = { exact: externalWebcams[0].deviceId };
+      } else if (videoDevices.length > 0) {
+        // If no external webcam but we have at least one camera, use first available
+        console.log("No external webcam found, using:", videoDevices[0].label);
+        videoConstraints.deviceId = { exact: videoDevices[0].deviceId };
+      }
+      
+      // Request camera access with our constraints
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints,
+        audio: false
+      });
+      
+      // Get track settings immediately
+      const videoTrack = stream.getVideoTracks()[0];
+      console.log("Using camera:", videoTrack.label);
       
       // Stop the stream after testing
       stream.getTracks().forEach(track => track.stop());
-      alert('Camera test successful!');
+      alert(`Camera test successful!\nUsing: ${videoTrack.label}`);
     } catch (error) {
       alert('Camera test failed. Please check your permissions and try again.');
       console.error('Camera test error:', error);
