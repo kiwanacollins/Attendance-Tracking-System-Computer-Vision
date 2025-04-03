@@ -21,6 +21,12 @@ let isModelLoading = false;
 const previousPixels: ImageData | null = null;
 const motionDetectedFrames = 0;
 
+// Reset function to clear module-level variables when component unmounts
+export function resetModuleState() {
+  model = null;
+  isModelLoading = false;
+}
+
 export default function LiveFeed() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -57,7 +63,8 @@ export default function LiveFeed() {
   
   // Load the TensorFlow.js model optimized for Raspberry Pi
   const loadModel = useCallback(async () => {
-    if (model || isModelLoading) return model;
+    // Always attempt to reload model if we're freshly mounting the component after navigation
+    if (isModelLoading) return model;
 
     try {
       isModelLoading = true;
@@ -67,6 +74,7 @@ export default function LiveFeed() {
 
       await tf.setBackend('webgl');
 
+      // Force reload the model even if it exists when the component mounts fresh
       model = await cocossd.load({
         base: 'lite_mobilenet_v2'
       });
@@ -627,6 +635,7 @@ export default function LiveFeed() {
     return () => {
       isMounted.current = false;
       stopStream();
+      resetModuleState(); // Reset module-level state on unmount
     };
   }, [loadModel, startCamera, stopStream]);
   

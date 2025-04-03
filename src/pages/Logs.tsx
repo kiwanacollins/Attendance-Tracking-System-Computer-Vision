@@ -14,16 +14,20 @@ export default function Logs() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
-  const filteredLogs = logs.filter(log => {
-    const matchesSearch = log.timestamp.includes(search) || 
-                         log.status.status.includes(search) ||
-                         log.status.message.includes(search);
+  const filteredLogs = logs ? logs.filter(log => {
+    // Skip entries with missing data
+    if (!log || !log.timestamp || !log.status) return false;
+    
+    const matchesSearch = search === '' || 
+                         log.timestamp.includes(search) || 
+                         (log.status.status && log.status.status.includes(search)) ||
+                         (log.status.message && log.status.message.includes(search));
     
     const matchesDateRange = (!startDate || new Date(log.timestamp) >= new Date(startDate)) &&
                            (!endDate || new Date(log.timestamp) <= new Date(endDate));
     
     return matchesSearch && matchesDateRange;
-  });
+  }) : [];
 
   const totalPages = Math.ceil(filteredLogs.length / ITEMS_PER_PAGE);
   const paginatedLogs = filteredLogs.slice(
@@ -35,9 +39,9 @@ export default function Logs() {
     const headers = ['Timestamp', 'Count', 'Status', 'Message'];
     const csvData = filteredLogs.map(log => [
       log.timestamp,
-      log.count,
-      log.status.status,
-      log.status.message
+      log.count || 0,
+      log.status?.status || 'unknown',
+      log.status?.message || ''
     ]);
     
     const csvContent = [headers, ...csvData]
@@ -107,17 +111,17 @@ export default function Logs() {
                 <tr
                   key={log.timestamp}
                   className={`border-t border-gray-700 ${
-                    log.status.status === 'error' ? 'bg-red-900/20' : ''
+                    log.status?.status === 'error' ? 'bg-red-900/20' : ''
                   }`}
                 >
                   <td className="px-6 py-4">
                     {new Date(log.timestamp).toLocaleString()}
                   </td>
-                  <td className="px-6 py-4">{log.count}</td>
+                  <td className="px-6 py-4">{log.count || 0}</td>
                   <td className="px-6 py-4">
-                    <StatusBadge status={log.status} />
+                    {log.status && <StatusBadge status={log.status} />}
                   </td>
-                  <td className="px-6 py-4">{log.status.message}</td>
+                  <td className="px-6 py-4">{log.status?.message || ''}</td>
                 </tr>
               ))}
             </tbody>
