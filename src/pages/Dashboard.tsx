@@ -50,7 +50,9 @@ export default function Dashboard() {
   
   // Memoized calculation of statistics
   const stats = useMemo(() => {
-    if (!logs.length || !entryExitData.length) {
+    console.log('Recalculating stats with logs:', logs.length, 'entries, entryExit:', entryExitData.length);
+    
+    if (!logs || logs.length === 0) {
       return {
         peakCount: count,
         avgCount: count,
@@ -82,32 +84,47 @@ export default function Dashboard() {
         startDate = subDays(now, 1);
     }
     
-    // Filter logs by date range
+    // Filter logs by date range - handle potential invalid log entries
     const filteredLogs = logs.filter(log => {
       if (!log || !log.timestamp) return false;
-      const logDate = parseISO(log.timestamp);
-      return logDate >= startDate && log.location === activeLocation;
+      try {
+        const logDate = new Date(log.timestamp);
+        return logDate >= startDate && (!log.location || log.location === activeLocation);
+      } catch (e) {
+        console.error('Error parsing log date:', e);
+        return false;
+      }
     });
+    
+    console.log('Filtered logs:', filteredLogs.length, 'for date range:', dateRange);
     
     // Filter entry/exit by date range
     const filteredEntryExit = entryExitData.filter(record => {
       if (!record || !record.timestamp) return false;
-      const recordDate = parseISO(record.timestamp);
-      return recordDate >= startDate && record.location === activeLocation;
+      try {
+        const recordDate = new Date(record.timestamp);
+        return recordDate >= startDate && (!record.location || record.location === activeLocation);
+      } catch (e) {
+        console.error('Error parsing entry/exit date:', e);
+        return false;
+      }
     });
     
+    console.log('Filtered entryExit:', filteredEntryExit.length, 'for date range:', dateRange);
+    
     // Calculate statistics
-    const peakCount = filteredLogs.reduce((max, log) => Math.max(max, log.count), 0);
+    const peakCount = filteredLogs.reduce((max, log) => Math.max(max, log.count || 0), 0);
+    const totalCounts = filteredLogs.reduce((sum, log) => sum + (log.count || 0), 0);
     const avgCount = filteredLogs.length > 0 
-      ? Math.round(filteredLogs.reduce((sum, log) => sum + log.count, 0) / filteredLogs.length) 
+      ? Math.round(totalCounts / filteredLogs.length) 
       : 0;
     
     const totalEntries = filteredEntryExit.reduce((sum, record) => {
-      return record.type === 'entry' ? sum + record.count : sum;
+      return record.type === 'entry' ? sum + (record.count || 0) : sum;
     }, 0);
     
     const totalExits = filteredEntryExit.reduce((sum, record) => {
-      return record.type === 'exit' ? sum + record.count : sum;
+      return record.type === 'exit' ? sum + (record.count || 0) : sum;
     }, 0);
     
     const occupancyRate = currentLocation 
@@ -117,6 +134,8 @@ export default function Dashboard() {
     const lastUpdated = filteredLogs.length > 0 
       ? filteredLogs[0].timestamp 
       : new Date().toISOString();
+    
+    console.log('Calculated stats:', { peakCount, avgCount, totalEntries, totalExits });
     
     return {
       peakCount,
@@ -130,7 +149,8 @@ export default function Dashboard() {
   
   // Generate chart data based on logs
   const chartData = useMemo(() => {
-    if (!logs.length) return [];
+    if (!logs || logs.length === 0) return [];
+    console.log('Generating chart data with logs:', logs.length);
     
     // Calculate date range limits
     const now = new Date();
@@ -156,9 +176,18 @@ export default function Dashboard() {
     // Filter logs by date range and location
     const filteredLogs = logs.filter(log => {
       if (!log || !log.timestamp) return false;
-      const logDate = parseISO(log.timestamp);
-      return logDate >= startDate && log.location === activeLocation;
+      try {
+        const logDate = parseISO(log.timestamp);
+        return logDate >= startDate && (!log.location || log.location === activeLocation);
+      } catch (e) {
+        console.error('Error parsing log date:', e);
+        return false;
+      }
     });
+    
+    console.log('Filtered chart logs:', filteredLogs.length, 'for date range:', dateRange);
+    
+    if (filteredLogs.length === 0) return [];
     
     // Different aggregation based on chart type
     if (chartType === 'hourly') {
@@ -173,12 +202,12 @@ export default function Dashboard() {
         if (!hourlyData[timeKey]) {
           hourlyData[timeKey] = {
             hour,
-            count: log.count,
+            count: log.count || 0,
             time: format(date, 'MMM dd, HH:00')
           };
         } else {
           // We'll use max count for the hour for better visualization
-          hourlyData[timeKey].count = Math.max(hourlyData[timeKey].count, log.count);
+          hourlyData[timeKey].count = Math.max(hourlyData[timeKey].count, log.count || 0);
         }
       });
       
@@ -195,12 +224,12 @@ export default function Dashboard() {
         if (!dailyData[dateKey]) {
           dailyData[dateKey] = {
             day,
-            count: log.count,
+            count: log.count || 0,
             date: format(date, 'MMM dd')
           };
         } else {
           // We'll use max count for the day for better visualization
-          dailyData[dateKey].count = Math.max(dailyData[dateKey].count, log.count);
+          dailyData[dateKey].count = Math.max(dailyData[dateKey].count, log.count || 0);
         }
       });
       
@@ -221,9 +250,9 @@ export default function Dashboard() {
         const capacity = currentLocation.capacity;
         
         filteredLogs.forEach(log => {
-          const percentage = (log.count / capacity) * 100;
+          const percentage = ((log.count || 0) / capacity) * 100;
           
-          if (log.count === 0) {
+          if ((log.count || 0) === 0) {
             occupancyDistribution[0].value++;
           } else if (percentage <= 25) {
             occupancyDistribution[1].value++;

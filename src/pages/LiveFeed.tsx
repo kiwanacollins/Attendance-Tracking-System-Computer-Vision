@@ -174,8 +174,8 @@ export default function LiveFeed() {
     
     // Ensure canvas has proper dimensions
     if (canvas.width < 10 || canvas.height < 10) {
-      canvas.width = 640;
-      canvas.height = 480;
+      canvas.width = 896;  // Keep width at 40% increase from original 640
+      canvas.height = 612; // Reduce height by 30% from current 874
     }
     
     // Always draw the video frame, even if dimensions not detected
@@ -679,7 +679,7 @@ export default function LiveFeed() {
           </div>
         )}
         
-        <div className="relative w-full max-w-4xl mx-auto bg-black" style={{ minHeight: "480px" }}>
+        <div className="relative w-full max-w-4xl mx-auto bg-black" style={{ minHeight: "612px" }}>
           {/* Video Element - Always visible and correctly sized */}
           <video
             ref={videoRef}
@@ -687,8 +687,8 @@ export default function LiveFeed() {
             playsInline
             muted
             style={{ 
-              minHeight: '480px',
-              minWidth: '640px',
+              minHeight: '612px',  // Reduced height by 30% from 874px
+              minWidth: '896px',   // Keep the increased width
               objectFit: 'contain',
               backgroundColor: 'black',
               position: 'relative',
@@ -700,15 +700,15 @@ export default function LiveFeed() {
           {/* Canvas element - Transparent overlay for detection drawing */}
           <canvas
             ref={canvasRef}
-            width="640"
-            height="480"
+            width="896"
+            height="612"
             className="absolute top-0 left-0 w-full"
             style={{ 
               display: isStreaming ? 'block' : 'none',
               pointerEvents: 'none',
               zIndex: 2,
-              minHeight: '480px',
-              minWidth: '640px',
+              minHeight: '612px',
+              minWidth: '896px',
               backgroundColor: 'transparent'
             }}
           />
