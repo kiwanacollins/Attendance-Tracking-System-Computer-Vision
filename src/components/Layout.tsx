@@ -1,7 +1,8 @@
 import React from 'react';
-import { Link, Outlet, useLocation } from 'react-router-dom';
-import { Camera, BarChart2, Settings, List, AlertTriangle } from 'lucide-react';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Camera, BarChart2, Settings, List, AlertTriangle, LogOut, User } from 'lucide-react';
 import OfflineIndicator from './OfflineIndicator';
+import { useAuth } from '../context/AuthContext';
 
 // Navigation items
 const navItems = [
@@ -14,17 +15,39 @@ const navItems = [
 
 export default function Layout({ children }: { children?: React.ReactNode }) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { logout, user } = useAuth();
+  
+  // Handle logout with navigation
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
   
   return (
     <div className="flex h-screen bg-gray-900 text-white">
       {/* Sidebar */}
       <aside className="w-16 md:w-64 bg-gray-800 border-r border-gray-700">
         <div className="px-4 py-6 text-center hidden md:block">
-          <h1 className="text-xl font-bold">Attendance Tracker</h1>
+          <h1 className="text-xl font-bold">Automated Counting Camera</h1>
         </div>
         <div className="md:hidden p-4 flex justify-center">
           <Camera size={28} />
         </div>
+        
+        {/* User info - visible only on desktop */}
+        <div className="hidden md:block px-4 py-2 mt-2 mb-6">
+          <div className="flex items-center p-2 bg-gray-700 rounded-lg">
+            <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center">
+              <User size={16} />
+            </div>
+            <div className="ml-2 overflow-hidden">
+              <p className="text-sm font-medium text-white truncate">{user || 'Admin'}</p>
+              <p className="text-xs text-gray-400">Administrator</p>
+            </div>
+          </div>
+        </div>
+        
         <nav className="mt-6">
           <ul>
             {navItems.map((item) => {
@@ -47,6 +70,17 @@ export default function Layout({ children }: { children?: React.ReactNode }) {
                 </li>
               );
             })}
+            
+            {/* Logout button */}
+            <li className="mt-6">
+              <button
+                onClick={handleLogout}
+                className="w-full flex items-center px-4 py-3 text-gray-400 hover:bg-gray-700 hover:text-white transition-colors rounded-lg"
+              >
+                <LogOut size={20} className="flex-shrink-0" />
+                <span className="ml-3 hidden md:block">Logout</span>
+              </button>
+            </li>
           </ul>
         </nav>
       </aside>

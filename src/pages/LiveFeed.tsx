@@ -659,7 +659,7 @@ export default function LiveFeed() {
   
   return (
     <div className="h-full flex flex-col">
-      <div className="py-4 px-6 bg-gray-800 flex items-center justify-between">
+      {/* <div className="py-4 px-6 bg-gray-800 flex items-center justify-between">
         <h1 className="text-xl font-semibold text-white">Live Video Feed</h1>
         <div className="flex space-x-4">
           <StatusBadge count={count} capacity={currentLocation?.capacity || 0} />
@@ -670,7 +670,7 @@ export default function LiveFeed() {
             <Settings size={20} />
           </Link>
         </div>
-      </div>
+      </div> */}
       
       <div className="flex-grow flex flex-col items-center justify-center bg-gray-900 p-4 relative">
         {error && (

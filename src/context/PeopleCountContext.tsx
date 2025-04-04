@@ -98,7 +98,7 @@ const initialState: CountState = {
   count: 0,
   logs: [],
   entryExitData: [],
-  locations: [{ id: 'default', name: 'Default Location', capacity: 50 }],
+  locations: [{ id: 'default', name: 'Maximum Count', capacity: 50 }],
   activeLocation: 'default',
   isOnline: true,
 };
@@ -546,9 +546,9 @@ export function PeopleCountProvider({ children }: { children: ReactNode }) {
 
   const removeLocation = useCallback(async (locationId: string) => {
     try {
-      // Special handling for the default location
+      // Special handling for the Maximum Count
       if (locationId === 'default') {
-        console.log('Cannot delete the default location as it is required by the system.');
+        console.log('Cannot delete the Maximum Count as it is required by the system.');
         return;
       }
       

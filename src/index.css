@@ -1,3 +1,62 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Existing styles */
+
+/* Add new animations for login page */
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-20px);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.cube {
+  transform-style: preserve-3d;
+  transform: rotateX(45deg) rotateZ(45deg);
+}
+
+.animate-float {
+  animation: float 15s ease-in-out infinite;
+}
+
+.animate-spin-slow {
+  animation: spin 20s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotateX(45deg) rotateZ(405deg);
+  }
+}
+
+.particle {
+  animation: float 20s infinite;
+}
+
+/* Add AI background styles for login page */
+.ai-background {
+  background-image: url('https://images.unsplash.com/photo-1639302576333-e4d3c2652100?q=80&w=2070');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.ai-grid {
+  background-image: 
+    linear-gradient(rgba(59, 130, 246, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59, 130, 246, 0.1) 1px, transparent 1px);
+  background-size: 20px 20px;
+}

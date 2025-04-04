@@ -11,8 +11,8 @@ const OfflineIndicator = () => {
   
   return (
     <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 bg-yellow-600 text-white px-3 py-2 rounded-lg shadow-lg">
-      <WifiOff size={18} />
-      <span>Offline Mode</span>
+      {/* <WifiOff size={18} />
+      <span>Offline Mode</span> */}
       <button 
         onClick={() => refreshData()} 
         className="ml-2 p-1 bg-yellow-700 rounded hover:bg-yellow-800 transition-colors"

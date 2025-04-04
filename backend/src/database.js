@@ -86,14 +86,14 @@ function initTables(db) {
     )
   `);
 
-  // Create a default location if none exists
+  // Create a Maximum Count if none exists
   const locationCount = db.prepare('SELECT COUNT(*) as count FROM locations').get();
   if (locationCount.count === 0) {
     db.prepare(`
       INSERT INTO locations (id, name, capacity)
       VALUES ('default', 'Main Room', 50)
     `).run();
-    logger.info('Created default location');
+    logger.info('Created Maximum Count');
   }
 }
 

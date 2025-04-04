@@ -67,7 +67,7 @@ const LocationItem = memo(({ location, isActive, onEdit, onDelete, onSelect }) =
             ? 'text-gray-600 cursor-not-allowed' 
             : 'hover:bg-gray-700 text-gray-400 hover:text-white'}`}
           title={location.id === 'default' 
-            ? "Cannot delete default location" 
+            ? "Cannot delete Maximum Count" 
             : isActive 
               ? "Cannot delete active location" 
               : "Delete location"}
@@ -290,9 +290,9 @@ export default function Config() {
   };
 
   const handleSaveLocation = (location: LocationData) => {
-    // Special handling for the default location
+    // Special handling for the Maximum Count
     if (editingLocation && editingLocation.id === 'default') {
-      // When editing the default location, preserve its ID
+      // When editing the Maximum Count, preserve its ID
       const updatedLocation = { ...location, id: 'default' };
       updateLocation(updatedLocation);
     } else if (editingLocation) {

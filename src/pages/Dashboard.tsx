@@ -680,7 +680,7 @@ export default function Dashboard() {
           </div>
           
           <div className="bg-gray-800 rounded-lg p-4">
-            <h2 className="text-lg font-semibold mb-4">Location Status</h2>
+            <h2 className="text-lg font-semibold mb-4">Count Status</h2>
             
             {locations.length === 0 ? (
               <div className="text-center py-6">
@@ -704,7 +704,8 @@ export default function Dashboard() {
                       <div className="flex justify-between items-start">
                         <div>
                           <h3 className="font-medium">
-                            {location.name}
+                            {/* {location.name} */}
+                            Maximum Count
                             {location.id === activeLocation && (
                               <span className="ml-2 text-xs bg-blue-600 px-2 py-0.5 rounded">Active</span>
                             )}
@@ -754,14 +755,14 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="text-right text-sm text-gray-500">
+        {/* <div className="text-right text-sm text-gray-500">
           <p>
             Last updated: {formatTimeAgo(stats.lastUpdated)}
             {!isApiConnected && (
               <span className="ml-2 text-amber-500">(Offline mode)</span>
             )}
           </p>
-        </div>
+        </div> */}
       </div>
     </div>
   );
