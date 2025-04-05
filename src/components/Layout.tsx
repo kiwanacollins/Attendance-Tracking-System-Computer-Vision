@@ -18,7 +18,7 @@ export default function Layout({ children }: { children?: React.ReactNode }) {
   const navigate = useNavigate();
   const { logout, user } = useAuth();
   
-  // Handle logout with navigation
+  // Handle logout with navigation.
   const handleLogout = () => {
     logout();
     navigate('/login');
