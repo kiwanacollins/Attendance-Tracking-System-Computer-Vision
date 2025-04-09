@@ -1,30 +1,22 @@
-import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import * as tf from '@tensorflow/tfjs';
 import * as cocossd from '@tensorflow-models/coco-ssd';
 import { usePeopleCount } from '../context/PeopleCountContext';
-import StatusBadge from '../components/StatusBadge';
-import { Loader2, Camera, CameraOff, RefreshCw, UserCheck, Settings } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Loader2, Camera, CameraOff, UserCheck } from 'lucide-react';
 
-// Motion detection threshold (0-1)
-const MOTION_THRESHOLD = 0.05;
-// Frame processing interval in milliseconds (lower = more CPU usage)
-const FRAME_INTERVAL = 500;
 // Model confidence threshold (0-1)
 const CONFIDENCE_THRESHOLD = 0.5;
-// Number of motion frames to detect before processing
-const MOTION_FRAMES_REQUIRED = 3;
 
 // Performance optimization flags for Raspberry Pi
 let model: cocossd.ObjectDetection | null = null;
 let isModelLoading = false;
-const previousPixels: ImageData | null = null;
-const motionDetectedFrames = 0;
+let frameProcessingEnabled = true;  // Control flag for frame processing on low-power devices
 
-// Reset function to clear module-level variables when component unmounts
-export function resetModuleState() {
+// Function to reset state when component unmounts (moved to module-level implementation)
+function resetModuleState() {
   model = null;
   isModelLoading = false;
+  frameProcessingEnabled = true;
 }
 
 export default function LiveFeed() {
@@ -34,27 +26,20 @@ export default function LiveFeed() {
   const isMounted = useRef<boolean>(true);
   const { count, setCount, activeLocation, locations } = usePeopleCount();
   
+  // Necessary state variables for Raspberry Pi optimized implementation
   const [isModelReady, setIsModelReady] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isLoadingStream, setIsLoadingStream] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [fps, setFps] = useState(0);
   const [resolution, setResolution] = useState<{width: number, height: number}>({ width: 0, height: 0 });
-  const [motionLevel, setMotionLevel] = useState(0);
-  const [isMotionDetected, setIsMotionDetected] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [lowPowerMode, setLowPowerMode] = useState(() => {
     // Default to true for Raspberry Pi
     return localStorage.getItem('low-power-mode') !== 'false';
   });
   
-  // Performance monitoring
-  const [processingTimes, setProcessingTimes] = useState<number[]>([]);
-  const [lastFrameTime, setLastFrameTime] = useState<number>(0);
-  // Track available cameras
-  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
+  // Track when user interaction is needed
   const [waitingForUserInteraction, setWaitingForUserInteraction] = useState(false);
-  const [isOfflineMode, setIsOfflineMode] = useState(localStorage.getItem('offline-mode') === 'true');
   
   // Get current location for capacity information
   const currentLocation = useMemo(() => {
@@ -72,17 +57,55 @@ export default function LiveFeed() {
 
       console.log('Loading TensorFlow.js model...');
 
-      await tf.setBackend('webgl');
-
-      // Force reload the model even if it exists when the component mounts fresh
-      model = await cocossd.load({
-        base: 'lite_mobilenet_v2'
-      });
-
-      console.log('Model loaded successfully');
-      if (isMounted.current) {
-        setIsModelReady(true);
+      // Use CPU backend if device is likely a Raspberry Pi
+      const isLowPoweredDevice = navigator.hardwareConcurrency <= 4;
+      
+      // Force CPU backend on Raspberry Pi for consistent performance
+      if (isLowPoweredDevice) {
+        console.log('Using CPU backend for Raspberry Pi');
+        await tf.setBackend('cpu');
+        
+        // Disable WebGL to prevent memory leaks on Raspberry Pi
+        if (tf.ENV.flagRegistry.WEBGL_VERSION) {
+          tf.ENV.set('WEBGL_VERSION', 0);
+        }
+        
+        // Purge WebGL memory if it was previously used
+        try {
+          const gl = await tf.backend().getGPGPUContext().gl;
+          if (gl) {
+            gl.finish();
+            gl.getExtension('WEBGL_lose_context')?.loseContext();
+          }
+        } catch (e) {
+          // Ignore errors if WebGL backend wasn't initialized
+        }
+      } else {
+        console.log('Using WebGL backend for powerful devices');
+        await tf.setBackend('webgl');
+        
+        // Optimize WebGL for higher-end devices
+        tf.env().set('WEBGL_FORCE_F16_TEXTURES', true);
+        tf.env().set('WEBGL_PACK', false);
       }
+      
+      // Aggressively dispose unused tensors
+      tf.tidy(() => {
+        // Use a lighter weight model for Raspberry Pi
+        console.log('Loading lite_mobilenet_v2 model for Raspberry Pi');
+        return cocossd.load({
+          base: 'lite_mobilenet_v2',
+          modelUrl: './model/model.json' // Use locally cached model if available
+        }).then(loadedModel => {
+          model = loadedModel;
+          console.log('Model loaded successfully');
+          if (isMounted.current) {
+            setIsModelReady(true);
+          }
+          return model;
+        });
+      });
+      
       return model;
     } catch (err) {
       console.error('Error loading model:', err);
@@ -92,98 +115,6 @@ export default function LiveFeed() {
       return null;
     } finally {
       isModelLoading = false;
-    }
-  }, []);
-
-  // Get available video devices
-  const getVideoDevices = useCallback(async () => {
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const cameras = devices.filter(device => device.kind === 'videoinput');
-      if (isMounted.current) {
-        setVideoDevices(cameras);
-      }
-      console.log('Available video devices:', cameras);
-    } catch (err) {
-      console.error('Error enumerating devices:', err);
-    }
-  }, []);
-
-  // Create a safe play function with retry logic
-  const safePlay = useCallback(async (video: HTMLVideoElement, maxRetries = 3): Promise<void | (() => void)> => {
-    let retryCount = 0;
-    
-    const attemptPlay = async () => {
-      try {
-        console.log('Attempting to play video...');
-        await video.play();
-        console.log('Video playback started successfully');
-        return true;
-      } catch (err) {
-        console.error('Video play error:', err);
-        return false;
-      }
-    };
-    
-    // First direct attempt
-    if (await attemptPlay()) {
-      setWaitingForUserInteraction(false);
-      return;
-    }
-    
-    // If first attempt fails, try with user interaction or timeout
-    console.log('First play attempt failed, showing user interaction prompt');
-    setWaitingForUserInteraction(true);
-    
-    // Fallback: try at regular intervals (only in development mode)
-    if (process.env.NODE_ENV === 'development') {
-      const intervalId = setInterval(async () => {
-        if (retryCount >= maxRetries) {
-          clearInterval(intervalId);
-          return;
-        }
-        
-        retryCount++;
-        console.log(`Auto-retry ${retryCount}/${maxRetries}...`);
-        
-        if (await attemptPlay()) {
-          clearInterval(intervalId);
-          setWaitingForUserInteraction(false);
-        }
-      }, 1000);
-      
-      // Clear interval on component unmount
-      return () => {
-        clearInterval(intervalId);
-      };
-    }
-  }, []);
-
-  // Always render video regardless of detection
-  const renderVideoOnly = useCallback(() => {
-    if (!videoRef.current || !canvasRef.current) return;
-    
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d', { 
-      alpha: false,
-      willReadFrequently: true 
-    });
-    
-    if (!ctx) return;
-    
-    // Ensure canvas has proper dimensions
-    if (canvas.width < 10 || canvas.height < 10) {
-      canvas.width = 896;  // Keep width at 40% increase from original 640
-      canvas.height = 612; // Reduce height by 30% from current 874
-    }
-    
-    // Always draw the video frame, even if dimensions not detected
-    try {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    } catch (error) {
-      // This can happen if video element isn't fully initialized
-      console.warn("Could not render video frame:", error);
     }
   }, []);
 
@@ -215,7 +146,6 @@ export default function LiveFeed() {
       console.log(`Found ${videoDevices.length} video input devices:`, videoDevices);
       
       // Attempt to identify external webcams (non-built-in)
-      // External webcams typically don't have "Built-in" or "FaceTime" in their labels
       const externalWebcams = videoDevices.filter(device => {
         const label = device.label.toLowerCase();
         return label && 
@@ -226,10 +156,15 @@ export default function LiveFeed() {
       
       console.log(`Identified ${externalWebcams.length} potential external webcams`);
       
+      // Use lower resolution for Raspberry Pi
+      // Check if we're likely on a Raspberry Pi or low-powered device
+      const isLowPoweredDevice = navigator.hardwareConcurrency <= 4;
+      
       // Set up video constraints based on available devices
-      let videoConstraints: MediaTrackConstraints = {
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
+      const videoConstraints: MediaTrackConstraints = {
+        width: { ideal: isLowPoweredDevice || lowPowerMode ? 640 : 1280 },
+        height: { ideal: isLowPoweredDevice || lowPowerMode ? 480 : 720 },
+        frameRate: { ideal: isLowPoweredDevice || lowPowerMode ? 15 : 30 }
       };
       
       // If we found external webcams, prioritize the first one
@@ -257,6 +192,18 @@ export default function LiveFeed() {
       const settings = videoTrack.getSettings();
       console.log("Track settings:", settings);
       
+      // Apply track constraints to further reduce CPU usage if on low-power mode
+      if (lowPowerMode && videoTrack.applyConstraints) {
+        try {
+          await videoTrack.applyConstraints({
+            frameRate: { max: 15 }
+          });
+          console.log("Applied additional constraints to reduce CPU usage");
+        } catch (constraintsErr) {
+          console.warn("Could not apply additional constraints:", constraintsErr);
+        }
+      }
+      
       // Get more information about the selected camera
       console.log("Using camera:", videoTrack.label);
       
@@ -280,7 +227,6 @@ export default function LiveFeed() {
       
       // Attach stream to video element
       videoRef.current.srcObject = stream;
-      setVideoDevices(videoDevices); // Update available devices in state
       
       // Set up event listeners with simpler approach
       videoRef.current.onloadedmetadata = () => {
@@ -307,26 +253,29 @@ export default function LiveFeed() {
               console.log("Video playing from canplay event");
               setIsStreaming(true);
             })
-            .catch(err => {
+            .catch(() => {
               console.log("Could not autoplay from canplay event");
             });
         }
       };
       
-    } catch (error: any) {
+    } catch (error) {
       console.error("Camera access failed:", error);
       
-      if (error.name === "NotReadableError") {
+      // Type check the error to ensure it has the expected properties
+      const cameraError = error as { name?: string; message?: string };
+      
+      if (cameraError.name === "NotReadableError") {
         setError("Camera is in use by another application. Please close other apps using the camera and try again.");
-      } else if (error.name === "NotAllowedError") {
+      } else if (cameraError.name === "NotAllowedError") {
         setError("Camera access denied. Please allow camera access in your browser settings.");
       } else {
-        setError(`Could not access camera: ${error.message}. Please check permissions and try again.`);
+        setError(`Could not access camera: ${cameraError.message || 'Unknown error'}. Please check permissions and try again.`);
       }
     } finally {
       setIsLoadingStream(false);
     }
-  }, [isStreaming]);
+  }, [isStreaming, lowPowerMode]);
 
   // Manual play when autoplay is blocked
   const handleManualPlay = useCallback(() => {
@@ -398,41 +347,27 @@ export default function LiveFeed() {
     });
   }, []);
 
-  // Detect motion in video frames for performance optimization
-  const detectMotion = useCallback((currentImageData: ImageData, previousImageData: ImageData): number => {
-    if (currentImageData.width !== previousImageData.width || currentImageData.height !== previousImageData.height) {
-      return 1; // Consider as motion if dimensions changed
-    }
+  // Simple function to render video frame without detection processing
+  const renderVideoOnly = useCallback(() => {
+    if (!videoRef.current || !canvasRef.current) return;
     
-    const currentPixels = currentImageData.data;
-    const prevPixels = previousImageData.data;
-    let diffCount = 0;
-    const totalPixels = currentPixels.length / 4; // RGBA values for each pixel
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d', { alpha: false });
     
-    // Sample pixels for faster processing (check every Nth pixel)
-    const samplingRate = lowPowerMode ? 8 : 4;
-    const samplesToCheck = totalPixels / samplingRate;
-    
-    for (let i = 0; i < currentPixels.length; i += 4 * samplingRate) {
-      // Check if the pixel has changed significantly
-      const rDiff = Math.abs(currentPixels[i] - prevPixels[i]);
-      const gDiff = Math.abs(currentPixels[i + 1] - prevPixels[i + 1]);
-      const bDiff = Math.abs(currentPixels[i + 2] - prevPixels[i + 2]);
-      
-      // If any channel has changed significantly, count as motion
-      if (rDiff > 25 || gDiff > 25 || bDiff > 25) {
-        diffCount++;
+    if (ctx && video.readyState >= 2) { // HAVE_CURRENT_DATA or better
+      try {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      } catch (err) {
+        // Silently handle errors to prevent console spam
       }
     }
-    
-    // Calculate motion level (0-1)
-    return diffCount / samplesToCheck;
-  }, [lowPowerMode]);
+  }, []);
 
   // Directly render video from constraints rather than using DOM dimensions
   const processVideoFrame = useCallback(async () => {
     // Add additional checks to ensure we have everything we need
-    if (!model || !videoRef.current || !canvasRef.current || !isMounted.current) {
+    if (!videoRef.current || !canvasRef.current || !isMounted.current) {
       return;
     }
     
@@ -440,7 +375,7 @@ export default function LiveFeed() {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d', { 
       alpha: false, // Use false for better performance
-      willReadFrequently: true
+      willReadFrequently: false // Set to false for Raspberry Pi optimization
     });
     
     if (!ctx) return;
@@ -466,28 +401,105 @@ export default function LiveFeed() {
       }
       
       // Only attempt detection if we have valid dimensions and model is ready
-      if (canvas.width >= 16 && canvas.height >= 16 && isModelReady && !isPaused) {
+      if (canvas.width >= 16 && canvas.height >= 16 && isModelReady && !isPaused && model) {
         try {
-          const predictions = await model.detect(video);
+          // On Raspberry Pi, use a smaller area for detection to improve performance
+          const isLowPoweredDevice = navigator.hardwareConcurrency <= 4;
+          
+          let detectionInput: HTMLVideoElement | HTMLCanvasElement = video;
+          
+          // For low-powered devices, create a smaller detection canvas
+          if (isLowPoweredDevice || lowPowerMode) {
+            // Use an even smaller detection area for Raspberry Pi
+            const tempCanvas = document.createElement('canvas');
+            // Use 40% of original size on Raspberry Pi in low power mode
+            const scaleFactor = lowPowerMode && isLowPoweredDevice ? 0.4 : 
+                                lowPowerMode ? 0.5 : 0.75;
+            
+            tempCanvas.width = Math.floor(canvas.width * scaleFactor);
+            tempCanvas.height = Math.floor(canvas.height * scaleFactor);
+            
+            const tempCtx = tempCanvas.getContext('2d', { alpha: false });
+            if (tempCtx) {
+              // Draw the video at reduced size
+              tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+              detectionInput = tempCanvas;
+            }
+          }
+          
+          // Run detection on the possibly downscaled input
+          // Wrap in tf.tidy to auto-cleanup tensors
+          const predictions = await tf.tidy(() => {
+            return model!.detect(detectionInput);
+          });
           
           // Only clear and redraw if we have detections to show
           if (predictions && predictions.length > 0) {
-            // Filter for people
+            // Filter for people with confidence threshold
             const peopleDetected = predictions.filter(prediction => 
               prediction.class === 'person' && prediction.score > CONFIDENCE_THRESHOLD
             );
             
+            // Update count and skip drawing if no people detected
+            if (peopleDetected.length === 0) {
+              setCount(0);
+              return;
+            }
+            
             // Update count
             setCount(peopleDetected.length);
             
-            if (peopleDetected.length > 0) {
-              // Draw boxes and labels over the existing frame
+            // Super simplified drawing for Raspberry Pi in low power mode
+            const simplifiedUI = isLowPoweredDevice && lowPowerMode;
+            
+            // Draw minimalistic UI for Raspberry Pi
+            if (simplifiedUI) {
+              // Just draw simple rectangles without text
+              ctx.lineWidth = 2;
+              ctx.strokeStyle = '#00FF00'; // Green for all detections
+              
+              peopleDetected.forEach(prediction => {
+                let [x, y, width, height] = prediction.bbox;
+                
+                // Scale coordinates back up
+                const scaleFactor = 1 / (lowPowerMode && isLowPoweredDevice ? 0.4 : 
+                                        lowPowerMode ? 0.5 : 0.75);
+                x *= scaleFactor;
+                y *= scaleFactor;
+                width *= scaleFactor;
+                height *= scaleFactor;
+                
+                // Draw simple bounding box without labels
+                ctx.beginPath();
+                ctx.rect(x, y, width, height);
+                ctx.stroke();
+              });
+              
+              // Simple count display
+              ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+              ctx.fillRect(10, 10, 100, 30);
+              
+              ctx.fillStyle = 'white';
+              ctx.font = '16px Arial';
+              ctx.fillText(`Count: ${peopleDetected.length}`, 20, 30);
+            } else {
+              // Full UI for more powerful devices
               ctx.font = '16px Arial';
               ctx.lineWidth = 2;
               
-              // Draw each detection box
+              // Draw each detection box, scaling coordinates if needed
               peopleDetected.forEach((prediction, index) => {
-                const [x, y, width, height] = prediction.bbox;
+                let [x, y, width, height] = prediction.bbox;
+                
+                // Scale coordinates back up if we used a downscaled detection
+                if ((isLowPoweredDevice || lowPowerMode) && detectionInput !== video) {
+                  const scaleFactor = lowPowerMode && isLowPoweredDevice ? 2.5 : 
+                                     lowPowerMode ? 2 : 1.33;
+                  x *= scaleFactor;
+                  y *= scaleFactor;
+                  width *= scaleFactor;
+                  height *= scaleFactor;
+                }
                 
                 // Different colors based on confidence
                 if (prediction.score > 0.8) {
@@ -503,25 +515,27 @@ export default function LiveFeed() {
                 ctx.rect(x, y, width, height);
                 ctx.stroke();
                 
-                // Draw label background
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                ctx.fillRect(x, y - 25, 120, 25);
-                
-                // Draw label text
-                ctx.fillStyle = '#FFFFFF';
-                ctx.fillText(`Person ${index + 1}: ${Math.round(prediction.score * 100)}%`, x + 5, y - 7);
+                // In low power mode, simplify the UI by drawing less
+                if (!lowPowerMode) {
+                  // Draw label background
+                  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                  ctx.fillRect(x, y - 25, 120, 25);
+                  
+                  // Draw label text
+                  ctx.fillStyle = '#FFFFFF';
+                  ctx.fillText(`Person ${index + 1}: ${Math.round(prediction.score * 100)}%`, x + 5, y - 7);
+                }
               });
               
-              // Display UI information on canvas
+              // Display UI information on canvas - simpler in low power mode
               ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-              ctx.fillRect(10, 10, 200, 90);
+              ctx.fillRect(10, 10, 200, 30);
               
               ctx.fillStyle = 'white';
               ctx.fillText(`Count: ${peopleDetected.length}`, 20, 30);
-              ctx.fillText(`FPS: ${Math.round(fps)}`, 20, 50);
               
-              // Display capacity information
-              if (currentLocation) {
+              // Only show capacity in regular mode
+              if (currentLocation && !lowPowerMode) {
                 const capacityPercentage = (peopleDetected.length / currentLocation.capacity) * 100;
                 let capacityColor = '#00FF00'; // Green by default
                 
@@ -532,13 +546,15 @@ export default function LiveFeed() {
                 }
                 
                 ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                ctx.fillRect(canvas.width - 210, 10, 200, 50);
+                ctx.fillRect(canvas.width - 210, 10, 200, 30);
                 
                 ctx.fillStyle = capacityColor;
-                ctx.fillText(`Location: ${currentLocation.name}`, canvas.width - 200, 30);
-                ctx.fillText(`Capacity: ${peopleDetected.length}/${currentLocation.capacity}`, canvas.width - 200, 50);
+                ctx.fillText(`Capacity: ${peopleDetected.length}/${currentLocation.capacity}`, canvas.width - 200, 30);
               }
             }
+          } else {
+            // If no predictions at all, update count to zero
+            setCount(0);
           }
         } catch (detectErr) {
           console.error("Detection error:", detectErr);
@@ -548,20 +564,59 @@ export default function LiveFeed() {
       console.error('Error processing video frame:', err);
     }
   }, [
-    model,
     resolution, 
-    fps, 
     setCount, 
     currentLocation,
     isModelReady,
-    isPaused
+    isPaused,
+    lowPowerMode
   ]);
   
   // Setup animation frame loop with more reliable rendering
   useEffect(() => {
     let frameId: number;
     let lastProcessTime = 0;
-    const DETECTION_INTERVAL = 1000; // Process once per second to reduce performance impact
+    let frameSkipCounter = 0;
+    
+    // Adaptive detection interval based on device capabilities
+    // For Raspberry Pi, use longer intervals to reduce CPU load
+    const isLowPoweredDevice = navigator.hardwareConcurrency <= 4;
+    const BASE_INTERVAL = isLowPoweredDevice ? 2500 : 1000; // 2.5 sec for low-power, 1 sec for higher-end
+    const DETECTION_INTERVAL = lowPowerMode ? BASE_INTERVAL * 2 : BASE_INTERVAL; // Even longer in low power mode
+    
+    // Set max frame rate based on device capability
+    const MAX_FPS = isLowPoweredDevice 
+      ? (lowPowerMode ? 5 : 10)  // 5-10 FPS for Raspberry Pi 
+      : (lowPowerMode ? 15 : 30); // 15-30 FPS for higher-end devices
+    
+    // Minimum time between frames in ms
+    const FRAME_INTERVAL = 1000 / MAX_FPS;
+    
+    console.log(`Using detection interval: ${DETECTION_INTERVAL}ms, max FPS: ${MAX_FPS}`);
+    
+    // Monitor and release memory periodically
+    if (isLowPoweredDevice) {
+      // For Raspberry Pi, aggressively clean up tensors to prevent memory issues
+      const memoryCleanupInterval = setInterval(() => {
+        if (isMounted.current) {
+          try {
+            // Manually dispose any unused tensors
+            tf.engine().endScope();
+            tf.engine().startScope();
+            
+            // Attempt to force garbage collection
+            if (window.gc) {
+              window.gc();
+            }
+          } catch (e) {
+            // Ignore errors in cleanup
+          }
+        }
+      }, 10000); // Every 10 seconds
+      
+      // Cleanup interval on unmount
+      return () => clearInterval(memoryCleanupInterval);
+    }
     
     const processFrame = async (timestamp: number) => {
       // Always request next frame FIRST to ensure smooth display
@@ -570,9 +625,19 @@ export default function LiveFeed() {
       // Skip processing if component unmounted
       if (!isMounted.current || !videoRef.current) return;
       
-      // Always try to render the video feed (even if dimensions are invalid)
+      // Control frame rate by skipping frames based on device capability
+      const timeSinceLastFrame = timestamp - lastProcessTime;
+      if (timeSinceLastFrame < FRAME_INTERVAL) {
+        return; // Skip this frame to maintain target FPS
+      }
+      
+      // Skip rendering if paused to save resources
       if (isStreaming && !isPaused) {
-        renderVideoOnly();
+        // In low power mode, only render video every few frames to save CPU
+        frameSkipCounter++;
+        if (!lowPowerMode || frameSkipCounter % 2 === 0) {
+          renderVideoOnly();
+        }
       }
       
       // Only run object detection at specified intervals if dimensions are valid
@@ -580,13 +645,39 @@ export default function LiveFeed() {
           isModelReady && 
           !isPaused && 
           videoRef.current.videoWidth > 10 && 
-          videoRef.current.videoHeight > 10) {
+          videoRef.current.videoHeight > 10 &&
+          frameProcessingEnabled) { // Use global processing flag
         try {
-          await processVideoFrame();
+          // Disable further processing until this one completes (prevent overlapping)
+          frameProcessingEnabled = false;
+          
+          // Track performance
+          const startTime = performance.now();
+          
+          // Process inside try-finally to ensure flag is reset
+          try {
+            await processVideoFrame();
+          } finally {
+            // Re-enable processing for next frame
+            frameProcessingEnabled = true;
+          }
+          
+          // Calculate processing time and adjust if necessary
+          const processingTime = performance.now() - startTime;
+          
+          // If detection is taking too long, force low power mode
+          if (processingTime > 500) {
+            if (!lowPowerMode && isLowPoweredDevice) {
+              console.log(`Processing taking too long (${processingTime.toFixed(0)}ms), switching to low power mode`);
+              setLowPowerMode(true);
+            }
+          }
+          
           lastProcessTime = timestamp;
         } catch (err) {
           console.error("Error in detection loop:", err);
           // Don't update lastProcessTime on error to allow retry on next interval
+          frameProcessingEnabled = true; // Re-enable processing on error
         }
       }
     };
@@ -594,7 +685,7 @@ export default function LiveFeed() {
     if (isStreaming) {
       // Start the animation loop
       frameId = requestAnimationFrame(processFrame);
-      console.log("Started animation frame loop");
+      console.log("Started animation frame loop with optimized settings for Raspberry Pi");
     }
     
     return () => {
@@ -602,15 +693,11 @@ export default function LiveFeed() {
         cancelAnimationFrame(frameId);
       }
     };
-  }, [isModelReady, isStreaming, isPaused, processVideoFrame, renderVideoOnly]);
+  }, [isModelReady, isStreaming, isPaused, processVideoFrame, renderVideoOnly, lowPowerMode]);
   
   // Initialize camera stream on component mount with error handling
   useEffect(() => {
     isMounted.current = true;
-    
-    // Check if we're in offline mode
-    const offlineMode = localStorage.getItem('offline-mode') === 'true';
-    setIsOfflineMode(offlineMode);
     
     // First load the model
     const init = async () => {
@@ -781,19 +868,19 @@ export default function LiveFeed() {
             </button>
           </div>
           
-          <div className="flex flex-col">
+          <div className="flex flex-col"></div>
             <div className="flex items-center space-x-6 text-white">
               <div className="flex items-center">
                 <UserCheck className="w-5 h-5 mr-1 text-blue-400" />
                 <span className="font-semibold">{count} detected</span>
               </div>
               
-              {/* <div className="flex items-center">
+              {/* <div className="flex items-center"></div>
                 <RefreshCw className={`w-5 h-5 mr-1 ${fps > 10 ? 'text-green-400' : 'text-yellow-400'}`} />
                 <span className="font-semibold">{fps} FPS</span>
               </div> */}
               
-              {/* <div className="flex items-center">
+              {/* <div className="flex items-center"></div>
                 <div className={`w-3 h-3 rounded-full mr-2 ${
                   isMotionDetected ? 'bg-green-500 animate-pulse' : 'bg-gray-500'
                 }`} />
