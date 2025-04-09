@@ -113,15 +113,40 @@ export default function LiveFeed() {
       
       // Load the model (don't use tf.tidy for async operations)
       console.log('Loading lite_mobilenet_v2 model for Raspberry Pi');
-      const loadedModel = await cocossd.load({
-        base: 'lite_mobilenet_v2',
-        // Specify modelUrl to use locally cached model if available
-        // This is critical for Raspberry Pi 4B to avoid network latency
-        modelUrl: './model/model.json'
-      });
       
-      model = loadedModel;
-      console.log('Model loaded successfully');
+      try {
+        // First attempt to load the model from the specified path
+        const loadedModel = await cocossd.load({
+          base: 'lite_mobilenet_v2',
+          // Don't specify modelUrl first to use the default URL from TensorFlow.js CDN
+        });
+        
+        model = loadedModel;
+        console.log('Model loaded successfully from TensorFlow.js CDN');
+      } catch (modelError) {
+        console.error('Error loading model from primary source:', modelError);
+        
+        // If first attempt fails, try alternative paths
+        try {
+          console.log('Attempting to load model from alternative source...');
+          const loadedModel = await cocossd.load({
+            base: 'lite_mobilenet_v2',
+            modelUrl: 'https://tfhub.dev/tensorflow/lite-model/ssd_mobilenet_v2/1/default/1'
+          });
+          
+          model = loadedModel;
+          console.log('Model loaded successfully from alternative source');
+        } catch (fallbackError) {
+          console.error('Error loading model from alternative source:', fallbackError);
+          
+          // Last resort: Load base model without custom path
+          console.log('Loading base model as last resort...');
+          const loadedModel = await cocossd.load();
+          
+          model = loadedModel;
+          console.log('Base model loaded successfully');
+        }
+      }
       
       // Pre-warm the model with a dummy tensor to avoid lag on first detection
       if (IS_RASPBERRY_PI) {
