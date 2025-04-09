@@ -5,12 +5,16 @@ import { usePeopleCount } from '../context/PeopleCountContext';
 import { Loader2, Camera, CameraOff, UserCheck } from 'lucide-react';
 
 // Model confidence threshold (0-1)
-const CONFIDENCE_THRESHOLD = 0.5;
+const CONFIDENCE_THRESHOLD = 0.55; // Increased slightly to reduce false positives
 
 // Performance optimization flags for Raspberry Pi
 let model: cocossd.ObjectDetection | null = null;
 let isModelLoading = false;
 let frameProcessingEnabled = true;  // Control flag for frame processing on low-power devices
+
+// Raspberry Pi 4B specific optimizations
+const IS_RASPBERRY_PI = navigator.userAgent.toLowerCase().includes('linux') && 
+                        navigator.hardwareConcurrency <= 4;
 
 // Function to reset state when component unmounts (moved to module-level implementation)
 function resetModuleState() {
@@ -34,7 +38,8 @@ export default function LiveFeed() {
   const [resolution, setResolution] = useState<{width: number, height: number}>({ width: 0, height: 0 });
   const [isPaused, setIsPaused] = useState(false);
   const [lowPowerMode, setLowPowerMode] = useState(() => {
-    // Default to true for Raspberry Pi
+    // Always default to true for Raspberry Pi 4B
+    if (IS_RASPBERRY_PI) return true;
     return localStorage.getItem('low-power-mode') !== 'false';
   });
   
@@ -57,28 +62,45 @@ export default function LiveFeed() {
 
       console.log('Loading TensorFlow.js model...');
 
-      // Use CPU backend if device is likely a Raspberry Pi
-      const isLowPoweredDevice = navigator.hardwareConcurrency <= 4;
-      
-      // Force CPU backend on Raspberry Pi for consistent performance
-      if (isLowPoweredDevice) {
-        console.log('Using CPU backend for Raspberry Pi');
+      // ALWAYS force CPU backend on Raspberry Pi 4B for consistent performance
+      if (IS_RASPBERRY_PI || navigator.hardwareConcurrency <= 4) {
+        console.log('Using CPU backend for Raspberry Pi 4B');
+        
+        // Hard disable WebGL on Raspberry Pi 4B - critical fix
+        tf.ENV.set('WEBGL_VERSION', 0);
+        
+        // Force CPU backend
         await tf.setBackend('cpu');
         
-        // Disable WebGL to prevent memory leaks on Raspberry Pi
-        if (tf.ENV.flagRegistry.WEBGL_VERSION) {
-          tf.ENV.set('WEBGL_VERSION', 0);
-        }
+        // Enable memory conservation mode for Raspberry Pi 4B
+        tf.ENV.set('KEEP_INTERMEDIATE_TENSORS', false);
         
-        // Purge WebGL memory if it was previously used
+        // Reduce WebGL memory usage
+        tf.ENV.set('WEBGL_DELETE_TEXTURE_THRESHOLD', 0);
+        
+        // Set smaller tensors as default
+        tf.ENV.set('WEBGL_FORCE_F16_TEXTURES', true);
+        
+        // Purge all WebGL memory if it was previously used
         try {
-          const gl = await tf.backend().getGPGPUContext().gl;
-          if (gl) {
-            gl.finish();
-            gl.getExtension('WEBGL_lose_context')?.loseContext();
+          if (tf.getBackend() === 'webgl') {
+            const gl = await tf.backend().getGPGPUContext().gl;
+            if (gl) {
+              gl.finish();
+              gl.getExtension('WEBGL_lose_context')?.loseContext();
+            }
           }
         } catch (e) {
           // Ignore errors if WebGL backend wasn't initialized
+        }
+        
+        // Manually run garbage collection if available
+        if (window.gc) {
+          try {
+            window.gc();
+          } catch (e) {
+            // Ignore if not available
+          }
         }
       } else {
         console.log('Using WebGL backend for powerful devices');
@@ -90,20 +112,31 @@ export default function LiveFeed() {
       }
       
       // Aggressively dispose unused tensors
-      tf.tidy(() => {
-        // Use a lighter weight model for Raspberry Pi
-        console.log('Loading lite_mobilenet_v2 model for Raspberry Pi');
-        return cocossd.load({
-          base: 'lite_mobilenet_v2',
-          modelUrl: './model/model.json' // Use locally cached model if available
-        }).then(loadedModel => {
-          model = loadedModel;
-          console.log('Model loaded successfully');
-          if (isMounted.current) {
-            setIsModelReady(true);
-          }
-          return model;
-        });
+      tf.tidy(() => {          // Use a lighter weight model for Raspberry Pi
+          console.log('Loading lite_mobilenet_v2 model for Raspberry Pi');
+          return cocossd.load({
+            base: 'lite_mobilenet_v2',
+            // Specify modelUrl to use locally cached model if available
+            // This is critical for Raspberry Pi 4B to avoid network latency
+            modelUrl: './model/model.json'
+          }).then(loadedModel => {
+            model = loadedModel;
+            console.log('Model loaded successfully');
+            
+            // Pre-warm the model with a dummy tensor to avoid lag on first detection
+            if (IS_RASPBERRY_PI) {
+              console.log('Pre-warming model for Raspberry Pi 4B...');
+              tf.tidy(() => {
+                const dummyTensor = tf.zeros([320, 240, 3]);
+                model?.detect(dummyTensor);
+              });
+            }
+            
+            if (isMounted.current) {
+              setIsModelReady(true);
+            }
+            return model;
+          });
       });
       
       return model;
@@ -161,10 +194,11 @@ export default function LiveFeed() {
       const isLowPoweredDevice = navigator.hardwareConcurrency <= 4;
       
       // Set up video constraints based on available devices
+      // Use much lower resolution on Raspberry Pi 4B specifically
       const videoConstraints: MediaTrackConstraints = {
-        width: { ideal: isLowPoweredDevice || lowPowerMode ? 640 : 1280 },
-        height: { ideal: isLowPoweredDevice || lowPowerMode ? 480 : 720 },
-        frameRate: { ideal: isLowPoweredDevice || lowPowerMode ? 15 : 30 }
+        width: { ideal: IS_RASPBERRY_PI ? 480 : (lowPowerMode ? 640 : 1280) },
+        height: { ideal: IS_RASPBERRY_PI ? 360 : (lowPowerMode ? 480 : 720) },
+        frameRate: { ideal: IS_RASPBERRY_PI ? 10 : (lowPowerMode ? 15 : 30) }
       };
       
       // If we found external webcams, prioritize the first one
@@ -192,13 +226,18 @@ export default function LiveFeed() {
       const settings = videoTrack.getSettings();
       console.log("Track settings:", settings);
       
-      // Apply track constraints to further reduce CPU usage if on low-power mode
-      if (lowPowerMode && videoTrack.applyConstraints) {
+      // Apply aggressive track constraints for Raspberry Pi 4B to reduce CPU usage
+      if (videoTrack.applyConstraints) {
         try {
           await videoTrack.applyConstraints({
-            frameRate: { max: 15 }
+            frameRate: { max: IS_RASPBERRY_PI ? 8 : (lowPowerMode ? 15 : 30) },
+            // Reduce resolution even further on actual Raspberry Pi hardware
+            ...(IS_RASPBERRY_PI && {
+              width: { ideal: 480, max: 640 },
+              height: { ideal: 360, max: 480 }
+            })
           });
-          console.log("Applied additional constraints to reduce CPU usage");
+          console.log("Applied aggressive constraints for Raspberry Pi 4B to reduce CPU usage");
         } catch (constraintsErr) {
           console.warn("Could not apply additional constraints:", constraintsErr);
         }
