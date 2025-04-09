@@ -5,7 +5,7 @@ import { usePeopleCount } from '../context/PeopleCountContext';
 import { Loader2, Camera, CameraOff, UserCheck } from 'lucide-react';
 
 // Model confidence threshold (0-1)
-const CONFIDENCE_THRESHOLD = 0.45; // Lowered to improve person detection
+const CONFIDENCE_THRESHOLD = 0.40; // Lowered threshold to improve detection sensitivity
 
 // Performance optimization flags for Raspberry Pi
 let model: cocossd.ObjectDetection | null = null;
@@ -459,56 +459,51 @@ export default function LiveFeed() {
       } catch (drawErr) {
         console.error("Could not draw video frame:", drawErr);
         return;
-      }
-      
-      // Only attempt detection if we have valid dimensions and model is ready
-      if (canvas.width >= 16 && canvas.height >= 16 && isModelReady && !isPaused && model) {
-        try {
-          // On Raspberry Pi, use a smaller area for detection to improve performance
-          const isLowPoweredDevice = navigator.hardwareConcurrency <= 4;
-          
-          let detectionInput: HTMLVideoElement | HTMLCanvasElement = video;
-          
-          // For low-powered devices, create a smaller detection canvas
-          if (isLowPoweredDevice || lowPowerMode) {
-            // Use an even smaller detection area for Raspberry Pi
-            const tempCanvas = document.createElement('canvas');
-            // Use 40% of original size on Raspberry Pi in low power mode
-            const scaleFactor = lowPowerMode && isLowPoweredDevice ? 0.4 : 
-                                lowPowerMode ? 0.5 : 0.75;
-            
-            tempCanvas.width = Math.floor(canvas.width * scaleFactor);
-            tempCanvas.height = Math.floor(canvas.height * scaleFactor);
-            
-            const tempCtx = tempCanvas.getContext('2d', { alpha: false });
-            if (tempCtx) {
-              // Draw the video at reduced size
-              tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
-              detectionInput = tempCanvas;
-            }
-          }
+      }          // Only attempt detection if we have valid dimensions and model is ready
+          if (canvas.width >= 16 && canvas.height >= 16 && isModelReady && !isPaused && model) {
+            try {
+              // On Raspberry Pi, use a smaller area for detection to improve performance
+              const isLowPoweredDevice = navigator.hardwareConcurrency <= 4;
+              
+              let detectionInput: HTMLVideoElement | HTMLCanvasElement = video;
+              
+              // For low-powered devices, create a smaller detection canvas
+              if (isLowPoweredDevice || lowPowerMode) {
+                // Use a larger detection area than before to improve detection accuracy
+                const tempCanvas = document.createElement('canvas');
+                // Increased scale factor for better detection while still optimizing for performance
+                const scaleFactor = lowPowerMode && isLowPoweredDevice ? 0.6 : 
+                                   lowPowerMode ? 0.7 : 0.85;
+                
+                tempCanvas.width = Math.floor(canvas.width * scaleFactor);
+                tempCanvas.height = Math.floor(canvas.height * scaleFactor);
+                
+                const tempCtx = tempCanvas.getContext('2d', { alpha: false });
+                if (tempCtx) {
+                  // Draw the video at reduced size
+                  tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+                  detectionInput = tempCanvas;
+                }
+              }
           
           // Run detection on the possibly downscaled input
-          // Wrap in tf.tidy to auto-cleanup tensors
-          const predictions = await tf.tidy(() => {
-            return model!.detect(detectionInput);
-          });
+          // Don't use tf.tidy for the actual detection to avoid tensor disposal issues
+          const predictions = await model!.detect(detectionInput, 20); // Increased max detections from default 10 to 20
+          
+          // Clean up tensors after detection (safer than wrapping in tidy)
+          tf.engine().endScope();
           
           // Only clear and redraw if we have detections to show
           if (predictions && predictions.length > 0) {
+            console.log("Raw predictions:", predictions); // Log raw predictions for debugging
+            
             // Filter for people with confidence threshold
             const peopleDetected = predictions.filter(prediction => 
-              (prediction.class === 'person' || prediction.class === 'Person') && prediction.score > CONFIDENCE_THRESHOLD
+              prediction.class === 'person' && prediction.score > CONFIDENCE_THRESHOLD
             );
             
-            // Log information about detections to help with debugging
-            if (predictions.length > 0) {
-              console.log(`Found ${predictions.length} objects, ${peopleDetected.length} people`);
-              // Log the first few predictions to see what's being detected
-              predictions.slice(0, 3).forEach(p => {
-                console.log(`Detected: ${p.class} with confidence ${p.score.toFixed(2)}`);
-              });
-            }
+            // Log filtered results for debugging
+            console.log(`Detected ${peopleDetected.length} people above threshold ${CONFIDENCE_THRESHOLD}`);
             
             // Update count and skip drawing if no people detected
             if (peopleDetected.length === 0) {
