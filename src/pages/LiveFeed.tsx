@@ -111,33 +111,30 @@ export default function LiveFeed() {
         tf.env().set('WEBGL_PACK', false);
       }
       
-      // Aggressively dispose unused tensors
-      tf.tidy(() => {          // Use a lighter weight model for Raspberry Pi
-          console.log('Loading lite_mobilenet_v2 model for Raspberry Pi');
-          return cocossd.load({
-            base: 'lite_mobilenet_v2',
-            // Specify modelUrl to use locally cached model if available
-            // This is critical for Raspberry Pi 4B to avoid network latency
-            modelUrl: './model/model.json'
-          }).then(loadedModel => {
-            model = loadedModel;
-            console.log('Model loaded successfully');
-            
-            // Pre-warm the model with a dummy tensor to avoid lag on first detection
-            if (IS_RASPBERRY_PI) {
-              console.log('Pre-warming model for Raspberry Pi 4B...');
-              tf.tidy(() => {
-                const dummyTensor = tf.zeros([320, 240, 3]);
-                model?.detect(dummyTensor);
-              });
-            }
-            
-            if (isMounted.current) {
-              setIsModelReady(true);
-            }
-            return model;
-          });
+      // Load the model (don't use tf.tidy for async operations)
+      console.log('Loading lite_mobilenet_v2 model for Raspberry Pi');
+      const loadedModel = await cocossd.load({
+        base: 'lite_mobilenet_v2',
+        // Specify modelUrl to use locally cached model if available
+        // This is critical for Raspberry Pi 4B to avoid network latency
+        modelUrl: './model/model.json'
       });
+      
+      model = loadedModel;
+      console.log('Model loaded successfully');
+      
+      // Pre-warm the model with a dummy tensor to avoid lag on first detection
+      if (IS_RASPBERRY_PI) {
+        console.log('Pre-warming model for Raspberry Pi 4B...');
+        tf.tidy(() => {
+          const dummyTensor = tf.zeros([320, 240, 3]);
+          model?.detect(dummyTensor);
+        });
+      }
+      
+      if (isMounted.current) {
+        setIsModelReady(true);
+      }
       
       return model;
     } catch (err) {
