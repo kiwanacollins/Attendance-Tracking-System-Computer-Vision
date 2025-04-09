@@ -5,7 +5,7 @@ import { usePeopleCount } from '../context/PeopleCountContext';
 import { Loader2, Camera, CameraOff, UserCheck } from 'lucide-react';
 
 // Model confidence threshold (0-1)
-const CONFIDENCE_THRESHOLD = 0.55; // Increased slightly to reduce false positives
+const CONFIDENCE_THRESHOLD = 0.45; // Lowered to improve person detection
 
 // Performance optimization flags for Raspberry Pi
 let model: cocossd.ObjectDetection | null = null;
@@ -498,8 +498,17 @@ export default function LiveFeed() {
           if (predictions && predictions.length > 0) {
             // Filter for people with confidence threshold
             const peopleDetected = predictions.filter(prediction => 
-              prediction.class === 'person' && prediction.score > CONFIDENCE_THRESHOLD
+              (prediction.class === 'person' || prediction.class === 'Person') && prediction.score > CONFIDENCE_THRESHOLD
             );
+            
+            // Log information about detections to help with debugging
+            if (predictions.length > 0) {
+              console.log(`Found ${predictions.length} objects, ${peopleDetected.length} people`);
+              // Log the first few predictions to see what's being detected
+              predictions.slice(0, 3).forEach(p => {
+                console.log(`Detected: ${p.class} with confidence ${p.score.toFixed(2)}`);
+              });
+            }
             
             // Update count and skip drawing if no people detected
             if (peopleDetected.length === 0) {
