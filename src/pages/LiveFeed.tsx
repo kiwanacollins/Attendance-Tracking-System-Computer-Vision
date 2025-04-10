@@ -84,10 +84,14 @@ export default function LiveFeed() {
         // Purge all WebGL memory if it was previously used
         try {
           if (tf.getBackend() === 'webgl') {
-            const gl = await tf.backend().getGPGPUContext().gl;
-            if (gl) {
-              gl.finish();
-              gl.getExtension('WEBGL_lose_context')?.loseContext();
+            // Cast to any to access WebGL-specific methods
+            const webglBackend = tf.backend() as any;
+            if (webglBackend && webglBackend.getGPGPUContext) {
+              const gl = webglBackend.getGPGPUContext().gl;
+              if (gl) {
+                gl.finish();
+                gl.getExtension('WEBGL_lose_context')?.loseContext();
+              }
             }
           }
         } catch (e) {
@@ -152,7 +156,7 @@ export default function LiveFeed() {
       if (IS_RASPBERRY_PI) {
         console.log('Pre-warming model for Raspberry Pi 4B...');
         tf.tidy(() => {
-          const dummyTensor = tf.zeros([320, 240, 3]);
+          const dummyTensor = tf.zeros([320, 240, 3]) as tf.Tensor3D;
           model?.detect(dummyTensor);
         });
       }
@@ -459,170 +463,194 @@ export default function LiveFeed() {
       } catch (drawErr) {
         console.error("Could not draw video frame:", drawErr);
         return;
-      }          // Only attempt detection if we have valid dimensions and model is ready
-          if (canvas.width >= 16 && canvas.height >= 16 && isModelReady && !isPaused && model) {
-            try {
-              // On Raspberry Pi, use a smaller area for detection to improve performance
-              const isLowPoweredDevice = navigator.hardwareConcurrency <= 4;
-              
-              let detectionInput: HTMLVideoElement | HTMLCanvasElement = video;
-              
-              // For low-powered devices, create a smaller detection canvas
-              if (isLowPoweredDevice || lowPowerMode) {
-                // Use a larger detection area than before to improve detection accuracy
-                const tempCanvas = document.createElement('canvas');
-                // Increased scale factor for better detection while still optimizing for performance
-                const scaleFactor = lowPowerMode && isLowPoweredDevice ? 0.6 : 
-                                   lowPowerMode ? 0.7 : 0.85;
-                
-                tempCanvas.width = Math.floor(canvas.width * scaleFactor);
-                tempCanvas.height = Math.floor(canvas.height * scaleFactor);
-                
-                const tempCtx = tempCanvas.getContext('2d', { alpha: false });
-                if (tempCtx) {
-                  // Draw the video at reduced size
-                  tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
-                  detectionInput = tempCanvas;
-                }
-              }
+      }      
+      
+      // Only attempt detection if we have valid dimensions and model is ready
+      if (canvas.width >= 16 && canvas.height >= 16 && isModelReady && !isPaused && model) {
+        try {
+          // On Raspberry Pi, use a smaller area for detection to improve performance
+          const isLowPoweredDevice = navigator.hardwareConcurrency <= 4;
           
-          // Run detection on the possibly downscaled input
-          // Don't use tf.tidy for the actual detection to avoid tensor disposal issues
-          const predictions = await model!.detect(detectionInput, 20); // Increased max detections from default 10 to 20
+          let detectionInput: HTMLVideoElement | HTMLCanvasElement = video;
           
-          // Clean up tensors after detection (safer than wrapping in tidy)
-          tf.engine().endScope();
-          
-          // Only clear and redraw if we have detections to show
-          if (predictions && predictions.length > 0) {
-            console.log("Raw predictions:", predictions); // Log raw predictions for debugging
+          // For low-powered devices, create a smaller detection canvas
+          if (isLowPoweredDevice || lowPowerMode) {
+            // Use a larger detection area than before to improve detection accuracy
+            const tempCanvas = document.createElement('canvas');
+            // Increased scale factor for better detection while still optimizing for performance
+            const scaleFactor = lowPowerMode && isLowPoweredDevice ? 0.6 : 
+                               lowPowerMode ? 0.7 : 0.85;
             
-            // Filter for people with confidence threshold
-            const peopleDetected = predictions.filter(prediction => 
-              prediction.class === 'person' && prediction.score > CONFIDENCE_THRESHOLD
-            );
+            tempCanvas.width = Math.floor(canvas.width * scaleFactor);
+            tempCanvas.height = Math.floor(canvas.height * scaleFactor);
             
-            // Log filtered results for debugging
-            console.log(`Detected ${peopleDetected.length} people above threshold ${CONFIDENCE_THRESHOLD}`);
-            
-            // Update count and skip drawing if no people detected
-            if (peopleDetected.length === 0) {
-              setCount(0);
-              return;
+            const tempCtx = tempCanvas.getContext('2d', { alpha: false });
+            if (tempCtx) {
+              // Draw the video at reduced size
+              tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+              detectionInput = tempCanvas;
             }
+          }
+          
+          // Log before running detection for debugging
+          console.log("Starting detection with input dimensions:", detectionInput.width, "x", detectionInput.height);
+          
+          // Create a tensor directly from the canvas/video element
+          let imageTensor = null;
+          try {
+            // Convert the image to a tensor
+            imageTensor = tf.browser.fromPixels(detectionInput);
             
-            // Update count
-            setCount(peopleDetected.length);
+            // Log tensor creation success
+            console.log("Successfully created image tensor with shape:", imageTensor.shape);
             
-            // Super simplified drawing for Raspberry Pi in low power mode
-            const simplifiedUI = isLowPoweredDevice && lowPowerMode;
+            // For Raspberry Pi, normalize the tensor values to improve detection
+            const normalizedTensor = imageTensor.toFloat().div(tf.scalar(255)) as tf.Tensor3D;
             
-            // Draw minimalistic UI for Raspberry Pi
-            if (simplifiedUI) {
-              // Just draw simple rectangles without text
-              ctx.lineWidth = 2;
-              ctx.strokeStyle = '#00FF00'; // Green for all detections
+            // Run detection with normalized tensor - this improves accuracy
+            const predictions = await model!.detect(normalizedTensor, 30); // Increased max detections to 30
+            
+            // Log successful detection
+            console.log("Detection completed successfully!");
+            
+            // Clean up tensors immediately
+            normalizedTensor.dispose();
+            imageTensor.dispose();
+            tf.engine().endScope();
+          
+            // Only clear and redraw if we have detections to show
+            if (predictions && predictions.length > 0) {
+              console.log("Raw predictions:", predictions); // Log raw predictions for debugging
               
-              peopleDetected.forEach(prediction => {
-                let [x, y, width, height] = prediction.bbox;
+              // Filter for people with confidence threshold
+              const peopleDetected = predictions.filter(prediction => 
+                prediction.class === 'person' && prediction.score > CONFIDENCE_THRESHOLD
+              );
+              
+              // Log filtered results for debugging
+              console.log(`Detected ${peopleDetected.length} people above threshold ${CONFIDENCE_THRESHOLD}`);
+              
+              // Update count and skip drawing if no people detected
+              if (peopleDetected.length === 0) {
+                setCount(0);
+                return;
+              }
+              
+              // Update count
+              setCount(peopleDetected.length);
+            
+              // Super simplified drawing for Raspberry Pi in low power mode
+              const simplifiedUI = isLowPoweredDevice && lowPowerMode;
+              
+              // Draw minimalistic UI for Raspberry Pi
+              if (simplifiedUI) {
+                // Just draw simple rectangles without text
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#00FF00'; // Green for all detections
                 
-                // Scale coordinates back up
-                const scaleFactor = 1 / (lowPowerMode && isLowPoweredDevice ? 0.4 : 
-                                        lowPowerMode ? 0.5 : 0.75);
-                x *= scaleFactor;
-                y *= scaleFactor;
-                width *= scaleFactor;
-                height *= scaleFactor;
-                
-                // Draw simple bounding box without labels
-                ctx.beginPath();
-                ctx.rect(x, y, width, height);
-                ctx.stroke();
-              });
-              
-              // Simple count display
-              ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-              ctx.fillRect(10, 10, 100, 30);
-              
-              ctx.fillStyle = 'white';
-              ctx.font = '16px Arial';
-              ctx.fillText(`Count: ${peopleDetected.length}`, 20, 30);
-            } else {
-              // Full UI for more powerful devices
-              ctx.font = '16px Arial';
-              ctx.lineWidth = 2;
-              
-              // Draw each detection box, scaling coordinates if needed
-              peopleDetected.forEach((prediction, index) => {
-                let [x, y, width, height] = prediction.bbox;
-                
-                // Scale coordinates back up if we used a downscaled detection
-                if ((isLowPoweredDevice || lowPowerMode) && detectionInput !== video) {
-                  const scaleFactor = lowPowerMode && isLowPoweredDevice ? 2.5 : 
-                                     lowPowerMode ? 2 : 1.33;
+                peopleDetected.forEach(prediction => {
+                  let [x, y, width, height] = prediction.bbox;
+                  
+                  // Scale coordinates back up
+                  const scaleFactor = 1 / (lowPowerMode && isLowPoweredDevice ? 0.4 : 
+                                          lowPowerMode ? 0.5 : 0.75);
                   x *= scaleFactor;
                   y *= scaleFactor;
                   width *= scaleFactor;
                   height *= scaleFactor;
-                }
                 
-                // Different colors based on confidence
-                if (prediction.score > 0.8) {
-                  ctx.strokeStyle = '#00FF00'; // Green for high confidence
-                } else if (prediction.score > 0.6) {
-                  ctx.strokeStyle = '#FFFF00'; // Yellow for medium confidence
-                } else {
-                  ctx.strokeStyle = '#FF9900'; // Orange for lower confidence
-                }
+                  // Draw simple bounding box without labels
+                  ctx.beginPath();
+                  ctx.rect(x, y, width, height);
+                  ctx.stroke();
+                });
                 
-                // Draw bounding box
-                ctx.beginPath();
-                ctx.rect(x, y, width, height);
-                ctx.stroke();
-                
-                // In low power mode, simplify the UI by drawing less
-                if (!lowPowerMode) {
-                  // Draw label background
-                  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                  ctx.fillRect(x, y - 25, 120, 25);
-                  
-                  // Draw label text
-                  ctx.fillStyle = '#FFFFFF';
-                  ctx.fillText(`Person ${index + 1}: ${Math.round(prediction.score * 100)}%`, x + 5, y - 7);
-                }
-              });
-              
-              // Display UI information on canvas - simpler in low power mode
-              ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-              ctx.fillRect(10, 10, 200, 30);
-              
-              ctx.fillStyle = 'white';
-              ctx.fillText(`Count: ${peopleDetected.length}`, 20, 30);
-              
-              // Only show capacity in regular mode
-              if (currentLocation && !lowPowerMode) {
-                const capacityPercentage = (peopleDetected.length / currentLocation.capacity) * 100;
-                let capacityColor = '#00FF00'; // Green by default
-                
-                if (capacityPercentage > 90) {
-                  capacityColor = '#FF0000'; // Red when near capacity
-                } else if (capacityPercentage > 70) {
-                  capacityColor = '#FFFF00'; // Yellow when getting full
-                }
-                
+                // Simple count display
                 ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                ctx.fillRect(canvas.width - 210, 10, 200, 30);
+                ctx.fillRect(10, 10, 100, 30);
                 
-                ctx.fillStyle = capacityColor;
-                ctx.fillText(`Capacity: ${peopleDetected.length}/${currentLocation.capacity}`, canvas.width - 200, 30);
+                ctx.fillStyle = 'white';
+                ctx.font = '16px Arial';
+                ctx.fillText(`Count: ${peopleDetected.length}`, 20, 30);
+              } else {
+                // Full UI for more powerful devices
+                ctx.font = '16px Arial';
+                ctx.lineWidth = 2;
+                
+                // Draw each detection box, scaling coordinates if needed
+                peopleDetected.forEach((prediction, index) => {
+                  let [x, y, width, height] = prediction.bbox;
+                  
+                  // Scale coordinates back up if we used a downscaled detection
+                  if ((isLowPoweredDevice || lowPowerMode) && detectionInput !== video) {
+                    const scaleFactor = lowPowerMode && isLowPoweredDevice ? 2.5 : 
+                                       lowPowerMode ? 2 : 1.33;
+                    x *= scaleFactor;
+                    y *= scaleFactor;
+                    width *= scaleFactor;
+                    height *= scaleFactor;
+                  }
+                  
+                  // Different colors based on confidence
+                  if (prediction.score > 0.8) {
+                    ctx.strokeStyle = '#00FF00'; // Green for high confidence
+                  } else if (prediction.score > 0.6) {
+                    ctx.strokeStyle = '#FFFF00'; // Yellow for medium confidence
+                  } else {
+                    ctx.strokeStyle = '#FF9900'; // Orange for lower confidence
+                  }
+                  
+                  // Draw bounding box
+                  ctx.beginPath();
+                  ctx.rect(x, y, width, height);
+                  ctx.stroke();
+                  
+                  // In low power mode, simplify the UI by drawing less
+                  if (!lowPowerMode) {
+                    // Draw label background
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                    ctx.fillRect(x, y - 25, 120, 25);
+                    
+                    // Draw label text
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillText(`Person ${index + 1}: ${Math.round(prediction.score * 100)}%`, x + 5, y - 7);
+                  }
+                });
+              
+                // Display UI information on canvas - simpler in low power mode
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(10, 10, 200, 30);
+                
+                ctx.fillStyle = 'white';
+                ctx.fillText(`Count: ${peopleDetected.length}`, 20, 30);
+                
+                // Only show capacity in regular mode
+                if (currentLocation && !lowPowerMode) {
+                  const capacityPercentage = (peopleDetected.length / currentLocation.capacity) * 100;
+                  let capacityColor = '#00FF00'; // Green by default
+                  
+                  if (capacityPercentage > 90) {
+                    capacityColor = '#FF0000'; // Red when near capacity
+                  } else if (capacityPercentage > 70) {
+                    capacityColor = '#FFFF00'; // Yellow when getting full
+                  }
+                  
+                  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                  ctx.fillRect(canvas.width - 210, 10, 200, 30);
+                  
+                  ctx.fillStyle = capacityColor;
+                  ctx.fillText(`Capacity: ${peopleDetected.length}/${currentLocation.capacity}`, canvas.width - 200, 30);
+                }
               }
+            } else {
+              // If no predictions at all, update count to zero
+              setCount(0);
             }
-          } else {
-            // If no predictions at all, update count to zero
-            setCount(0);
+          } catch (detectErr) {
+            console.error("Detection error:", detectErr);
           }
-        } catch (detectErr) {
-          console.error("Detection error:", detectErr);
+        } catch (err) {
+          console.error('Error processing video frame:', err);
         }
       }
     } catch (err) {
@@ -632,11 +660,11 @@ export default function LiveFeed() {
     resolution, 
     setCount, 
     currentLocation,
-    isModelReady,
+    isModelReady, 
     isPaused,
     lowPowerMode
   ]);
-  
+
   // Setup animation frame loop with more reliable rendering
   useEffect(() => {
     let frameId: number;
