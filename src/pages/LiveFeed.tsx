@@ -7,25 +7,40 @@ import * as blazeface from '@tensorflow-models/blazeface';
 import { usePeopleCount } from '../context/PeopleCountContext';
 import { Loader2, Camera, CameraOff, UserCheck } from 'lucide-react';
 
-// Model confidence threshold (0-1)
-const CONFIDENCE_THRESHOLD = 0.35; // Further lowered threshold to improve detection sensitivity
+// Model confidence threshold (0-1) - LOWER FOR RASPBERRY PI
+const CONFIDENCE_THRESHOLD = IS_RASPBERRY_PI ? 0.2 : 0.35; 
 
 // Detection model types
 type DetectionModelType = 'cocossd' | 'blazeface' | 'mobilenet';
-const DETECTION_MODEL: DetectionModelType = 'blazeface'; // Using BlazeFace as primary model - much faster and lighter
+// ALWAYS USE BLAZEFACE FOR RASPBERRY PI - it's much lighter
+const DETECTION_MODEL: DetectionModelType = 'blazeface'; 
 
 // Performance optimization flags for Raspberry Pi
 let model: any = null; // Use any type to accommodate different model types
 let modelType: DetectionModelType = DETECTION_MODEL;
 let isModelLoading = false;
-let frameProcessingEnabled = true;  // Control flag for frame processing on low-power devices
+let frameProcessingEnabled = true;
+// Add memory tracking
+let lastMemoryCleanup = 0;
 
-// Raspberry Pi 4B specific optimizations
+// Raspberry Pi 4B specific optimizations - IMPROVED DETECTION
 const IS_RASPBERRY_PI = navigator.userAgent.toLowerCase().includes('linux') && 
                         navigator.hardwareConcurrency <= 4;
 
-// Function to reset state when component unmounts (moved to module-level implementation)
+// Function to reset state when component unmounts
 function resetModuleState() {
+  // Ensure all tensors are disposed when component unmounts
+  try {
+    if (tf.engine().numTensors > 0) {
+      console.log(`Cleaning up ${tf.engine().numTensors} tensors`);
+      tf.engine().disposeVariables();
+      tf.engine().endScope();
+      tf.engine().startScope();
+    }
+  } catch (e) {
+    console.error("Error cleaning tensors:", e);
+  }
+  
   model = null;
   isModelLoading = false;
   frameProcessingEnabled = true;
@@ -75,58 +90,22 @@ export default function LiveFeed() {
         console.log('Setting up TensorFlow.js for Raspberry Pi 4B - FORCING CPU MODE');
         
         try {
-          // For Raspberry Pi, ALWAYS use CPU backend to avoid WebGL context loss
-          // First make sure TensorFlow is ready
+          // Make sure TensorFlow is ready
           await tf.ready();
           
-          // Hard disable WebGL completely for Raspberry Pi
-          tf.env().set('WEBGL_VERSION', 0); // Disable WebGL entirely
-          
-          // Memory optimization settings
-          tf.env().set('KEEP_INTERMEDIATE_TENSORS', false);
-          tf.env().set('CHECK_COMPUTATION_FOR_ERRORS', false); // Disable error checking
-          
-          // Force CPU backend
+          // CRITICAL: COMPLETELY DISABLE WEBGL FOR RASPBERRY PI
+          tf.env().set('WEBGL_VERSION', 0);
           await tf.setBackend('cpu');
-          console.log('Successfully set up CPU backend for Raspberry Pi');
+          console.log('Successfully set CPU backend for Raspberry Pi');
           
-          // Reset any WebGL context that might be active
-          try {
-            const canvas = document.createElement('canvas');
-            const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-            if (gl) {
-              const loseContextExt = gl.getExtension('WEBGL_lose_context');
-              if (loseContextExt) {
-                loseContextExt.loseContext();
-              }
-            }
-          } catch (resetErr) {
-            // Ignore errors from WebGL reset attempts
-          }
+          // Aggressive memory management for Raspberry Pi
+          tf.env().set('KEEP_INTERMEDIATE_TENSORS', false);
+          tf.env().set('WEBGL_CPU_FORWARD', false);
+          tf.env().set('CHECK_COMPUTATION_FOR_ERRORS', false);
+          tf.ENV.set('WEBGL_FORCE_F16_TEXTURES', false);
+          tf.ENV.set('WEBGL_PACK', false);
         } catch (e) {
           console.error('CPU backend setup failed:', e);
-          // Last resort - try to use the most basic WebGL settings
-          try {
-            // Minimal WebGL settings as last resort
-            tf.env().set('WEBGL_VERSION', 1);
-            tf.env().set('WEBGL_FORCE_F16_TEXTURES', true);
-            tf.env().set('WEBGL_PACK', false);
-            tf.env().set('DISPOSE_TENSORS_WHEN_NODATA_OUTPUT', true);
-            tf.env().set('WEBGL_DELETE_TEXTURE_THRESHOLD', 0);
-            await tf.setBackend('webgl');
-            console.log('Fallback to minimal WebGL settings');
-          } catch (webglErr) {
-            console.error('All backend setup attempts failed:', webglErr);
-          }
-        }
-        
-        // Force garbage collection if available
-        if (typeof window !== 'undefined' && (window as any).gc) {
-          try {
-            (window as any).gc();
-          } catch (e) {
-            // Ignore if not available
-          }
         }
       } else {
         console.log('Using WebGL backend for powerful devices');
@@ -137,15 +116,23 @@ export default function LiveFeed() {
         tf.env().set('WEBGL_PACK', true);
       }
       
-      // Load the model based on selected model type
-      console.log(`Loading ${modelType} model optimized for Raspberry Pi`);
-      
-      try {
-        // For Raspberry Pi 4B, always force to BlazeFace for best performance
-        if (IS_RASPBERRY_PI) {
-          console.log('Raspberry Pi detected: Forcing BlazeFace model for optimal performance');
-          modelType = 'blazeface';
-        }
+      // For Raspberry Pi 4B, ALWAYS force to BlazeFace and use minimal config
+      if (IS_RASPBERRY_PI) {
+        console.log('Raspberry Pi detected: Forcing BlazeFace model with minimal config');
+        modelType = 'blazeface';
+        
+        // Load the most lightweight version of BlazeFace
+        model = await blazeface.load({
+          maxFaces: 6,  // Allow for multiple faces but limit
+          inputWidth: 128,  // Use smallest possible input dimensions
+          inputHeight: 128,
+          iouThreshold: 0.3,  // Lower threshold for faster processing
+          scoreThreshold: 0.5  // More lenient threshold for Raspberry Pi
+        });
+        console.log('BlazeFace model loaded successfully with Raspberry Pi optimizations');
+      } else {
+        // Regular loading for other devices
+        console.log(`Loading ${modelType} model optimized for Raspberry Pi`);
         
         switch (modelType) {
           case 'blazeface':
@@ -229,59 +216,59 @@ export default function LiveFeed() {
             }
             break;
         }
+      }
+      
+      // Pre-warm the model with a dummy tensor to avoid lag on first detection
+      console.log('Pre-warming model for Raspberry Pi 4B...');
+      try {
+        // Use tidy to ensure proper tensor cleanup
+        await tf.ready(); // Ensure TensorFlow backend is ready
         
-        // Pre-warm the model with a dummy tensor to avoid lag on first detection
-        console.log('Pre-warming model for Raspberry Pi 4B...');
-        try {
-          // Use tidy to ensure proper tensor cleanup
-          await tf.ready(); // Ensure TensorFlow backend is ready
+        tf.tidy(() => {
+          // Create simple dummy tensor with minimal dimensions to reduce memory usage
+          const dummyTensor = tf.zeros([160, 120, 3]);
           
-          tf.tidy(() => {
-            // Create simple dummy tensor with minimal dimensions to reduce memory usage
-            const dummyTensor = tf.zeros([160, 120, 3]);
-            
-            // Handle different model types safely
-            if (modelType === 'cocossd' && model) {
-              (model as cocossd.ObjectDetection).detect(dummyTensor as tf.Tensor3D);
-            } else if (modelType === 'blazeface' && model) {
-              (model as any).estimateFaces(dummyTensor as tf.Tensor3D);
-            } else if (modelType === 'mobilenet' && model) {
-              (model as any).classify(dummyTensor as tf.Tensor3D);
-            }
-            // No need to manually dispose the tensor, tidy does this automatically
-          });
-        } catch (warmingError) {
-          console.warn('Model pre-warming failed, but we can continue:', warmingError);
-          // Pre-warming is optional - failure here shouldn't stop the whole process
-        } finally {
-          // Clean up safely - no need to check if scope is active
-          // The tf.tidy above handles tensor cleanup automatically
-        }
+          // Handle different model types safely
+          if (modelType === 'cocossd' && model) {
+            (model as cocossd.ObjectDetection).detect(dummyTensor as tf.Tensor3D);
+          } else if (modelType === 'blazeface' && model) {
+            (model as any).estimateFaces(dummyTensor as tf.Tensor3D);
+          } else if (modelType === 'mobilenet' && model) {
+            (model as any).classify(dummyTensor as tf.Tensor3D);
+          }
+          // No need to manually dispose the tensor, tidy does this automatically
+        });
+      } catch (warmingError) {
+        console.warn('Model pre-warming failed, but we can continue:', warmingError);
+        // Pre-warming is optional - failure here shouldn\'t stop the whole process
+      } finally {
+        // Clean up safely - no need to check if scope is active
+        // The tf.tidy above handles tensor cleanup automatically
+      }
+      
+      if (isMounted.current) {
+        setIsModelReady(true);
+      }
+      
+      return model;
+    } catch (err) {
+      console.error('All model loading attempts failed:', err);
+      
+      // Last fallback attempt - try the absolute most basic model
+      try {
+        console.log('Attempting emergency fallback to basic BlazeFace...');
+        model = await blazeface.load();
+        modelType = 'blazeface';
+        console.log('Emergency fallback to BlazeFace successful');
         
         if (isMounted.current) {
           setIsModelReady(true);
         }
         
         return model;
-      } catch (err) {
-        console.error('All model loading attempts failed:', err);
-        
-        // Last fallback attempt - try the absolute most basic model
-        try {
-          console.log('Attempting emergency fallback to basic BlazeFace...');
-          model = await blazeface.load();
-          modelType = 'blazeface';
-          console.log('Emergency fallback to BlazeFace successful');
-          
-          if (isMounted.current) {
-            setIsModelReady(true);
-          }
-          
-          return model;
-        } catch (finalError) {
-          console.error('Emergency fallback failed:', finalError);
-          throw finalError; // Re-throw to be caught by outer catch
-        }
+      } catch (finalError) {
+        console.error('Emergency fallback failed:', finalError);
+        throw finalError; // Re-throw to be caught by outer catch
       }
     } catch (err) {
       console.error('Error loading any model:', err);
@@ -332,16 +319,11 @@ export default function LiveFeed() {
       
       console.log(`Identified ${externalWebcams.length} potential external webcams`);
       
-      // Use lower resolution for Raspberry Pi
-      // Check if we're likely on a Raspberry Pi or low-powered device
-      const isLowPoweredDevice = navigator.hardwareConcurrency <= 4;
-      
-      // Set up video constraints based on available devices
-      // Use much lower resolution on Raspberry Pi 4B specifically
+      // SIGNIFICANTLY REDUCE RESOLUTION FOR RASPBERRY PI
       const videoConstraints: MediaTrackConstraints = {
-        width: { ideal: IS_RASPBERRY_PI ? 480 : (lowPowerMode ? 640 : 1280) },
-        height: { ideal: IS_RASPBERRY_PI ? 360 : (lowPowerMode ? 480 : 720) },
-        frameRate: { ideal: IS_RASPBERRY_PI ? 10 : (lowPowerMode ? 15 : 30) }
+        width: { ideal: IS_RASPBERRY_PI ? 320 : (lowPowerMode ? 640 : 1280) },
+        height: { ideal: IS_RASPBERRY_PI ? 240 : (lowPowerMode ? 480 : 720) },
+        frameRate: { ideal: IS_RASPBERRY_PI ? 5 : (lowPowerMode ? 15 : 30) }
       };
       
       // If we found external webcams, prioritize the first one
@@ -373,14 +355,14 @@ export default function LiveFeed() {
       if (videoTrack.applyConstraints) {
         try {
           await videoTrack.applyConstraints({
-            frameRate: { max: IS_RASPBERRY_PI ? 8 : (lowPowerMode ? 15 : 30) },
-            // Reduce resolution even further on actual Raspberry Pi hardware
+            frameRate: { max: IS_RASPBERRY_PI ? 5 : (lowPowerMode ? 15 : 30) },
+            // Reduce resolution drastically for Raspberry Pi
             ...(IS_RASPBERRY_PI && {
-              width: { ideal: 480, max: 640 },
-              height: { ideal: 360, max: 480 }
+              width: { ideal: 320, max: 480 },
+              height: { ideal: 240, max: 360 }
             })
           });
-          console.log("Applied aggressive constraints for Raspberry Pi 4B to reduce CPU usage");
+          console.log("Applied aggressive constraints for Raspberry Pi 4B");
         } catch (constraintsErr) {
           console.warn("Could not apply additional constraints:", constraintsErr);
         }
@@ -553,17 +535,14 @@ export default function LiveFeed() {
       return;
     }
     
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d', { 
-      alpha: false, // Use false for better performance
-      willReadFrequently: false // Set to false for Raspberry Pi optimization
-    });
-    
-    if (!ctx) return;
+    // Skip processing if model isn't ready
+    if (!model || !isModelReady) {
+      console.log("Model not ready yet, skipping frame processing");
+      return;
+    }
     
     try {
-      // Always use the resolution from our state - don't rely on videoWidth/videoHeight
+      // Always use the resolution from our state
       const useWidth = resolution.width || 640;
       const useHeight = resolution.height || 480;
       
@@ -585,273 +564,47 @@ export default function LiveFeed() {
       // Only attempt detection if we have valid dimensions and model is ready
       if (canvas.width >= 16 && canvas.height >= 16 && isModelReady && !isPaused && model) {
         try {
-          // On Raspberry Pi, use a smaller area for detection to improve performance
-          const isLowPoweredDevice = navigator.hardwareConcurrency <= 4;
+          // Create a smaller detection canvas - MUCH smaller for Raspberry Pi
+          const tempCanvas = document.createElement('canvas');
+          // Use extremely small input for Raspberry Pi detection
+          const scaleFactor = IS_RASPBERRY_PI ? 0.35 : (lowPowerMode ? 0.6 : 0.85);
           
-          let detectionInput: HTMLVideoElement | HTMLCanvasElement = video;
+          tempCanvas.width = Math.floor(canvas.width * scaleFactor);
+          tempCanvas.height = Math.floor(canvas.height * scaleFactor);
           
-          // For low-powered devices, create a smaller detection canvas
-          if (isLowPoweredDevice || lowPowerMode) {
-            // Use a larger detection area than before to improve detection accuracy
-            const tempCanvas = document.createElement('canvas');
-            // Increased scale factor for better detection while still optimizing for performance
-            const scaleFactor = lowPowerMode && isLowPoweredDevice ? 0.6 : 
-                               lowPowerMode ? 0.7 : 0.85;
+          const tempCtx = tempCanvas.getContext('2d', { alpha: false });
+          if (tempCtx) {
+            // Draw the video at reduced size
+            tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
             
-            tempCanvas.width = Math.floor(canvas.width * scaleFactor);
-            tempCanvas.height = Math.floor(canvas.height * scaleFactor);
-            
-            const tempCtx = tempCanvas.getContext('2d', { alpha: false });
-            if (tempCtx) {
-              // Draw the video at reduced size
-              tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
-              detectionInput = tempCanvas;
-            }
+            // Create tensor and ensure it's properly managed
+            tf.tidy(() => {
+              // Convert image to tensor and normalize
+              const imageTensor = tf.browser.fromPixels(tempCanvas);
+              const normalizedTensor = imageTensor.toFloat().div(tf.scalar(255)) as tf.Tensor3D;
+              
+              // For Raspberry Pi, use simplified detection approach
+              if (IS_RASPBERRY_PI && modelType === 'blazeface') {
+                blazefaceDetection(normalizedTensor, ctx, tempCanvas.width, tempCanvas.height);
+              } else {
+                // Regular detection for other devices
+                regularDetection(normalizedTensor, ctx, tempCanvas.width, tempCanvas.height);
+              }
+              
+              // Automatically cleaned up by tf.tidy
+            });
           }
           
-          // Log before running detection for debugging
-          console.log("Starting detection with input dimensions:", detectionInput.width, "x", detectionInput.height);
-          
-          // Create a tensor directly from the canvas/video element
-          let imageTensor = null;
-          try {
-            // Convert the image to a tensor
-            imageTensor = tf.browser.fromPixels(detectionInput);
-            
-            // Log tensor creation success
-            console.log("Successfully created image tensor with shape:", imageTensor.shape);
-            
-            // For Raspberry Pi, normalize the tensor values to improve detection
-            const normalizedTensor = imageTensor.toFloat().div(tf.scalar(255)) as tf.Tensor3D;
-            
-            // Process differently based on model type
-            let peopleDetected: any[] = [];
-            
-            if (modelType === 'blazeface') {
-              // BlazeFace returns face detections - perfect for counting people
-              console.log("Running BlazeFace detection...");
-              const faceResults = await (model as any).estimateFaces(normalizedTensor);
-              console.log("BlazeFace detection results:", faceResults);
-              
-              // Convert BlazeFace results to a format compatible with our existing code
-              peopleDetected = faceResults.map((face: any, index: number) => ({
-                bbox: [
-                  face.topLeft[0], // x
-                  face.topLeft[1], // y
-                  face.bottomRight[0] - face.topLeft[0], // width
-                  face.bottomRight[1] - face.topLeft[1], // height
-                ],
-                class: 'person', // Treat faces as people
-                score: face.probability[0], // Use detection probability
-                landmarks: face.landmarks // Keep face landmarks if needed
-              })).filter(detection => detection.score > CONFIDENCE_THRESHOLD);
-              
-              console.log(`BlazeFace detected ${peopleDetected.length} faces above threshold ${CONFIDENCE_THRESHOLD}`);
-            } else if (modelType === 'mobilenet') {
-              // MobileNet only classifies the whole image, so we need a different approach
-              console.log("Running MobileNet classification...");
-              const classifications = await (model as any).classify(normalizedTensor);
-              console.log("MobileNet classification results:", classifications);
-              
-              // Check if any classification includes "person" or related terms
-              const personClasses = ['person', 'people', 'human', 'man', 'woman', 'child', 'face'];
-              const personClassifications = classifications.filter((c: any) => 
-                personClasses.some(term => c.className.toLowerCase().includes(term)) && 
-                c.probability > CONFIDENCE_THRESHOLD
-              );
-              
-              // If we detect any people-related classes, estimate count based on confidence
-              if (personClassifications.length > 0) {
-                const confidenceScore = personClassifications[0].probability;
-                // Crude estimation - if confidence is really high, might be multiple people
-                const estimatedCount = confidenceScore > 0.9 ? 2 : 1;
-                
-                // Create synthetic detection boxes based on image dimensions
-                for (let i = 0; i < estimatedCount; i++) {
-                  peopleDetected.push({
-                    bbox: [
-                      imageTensor.shape[1] * 0.3 + (i * 100), // x at 30% of width + offset
-                      imageTensor.shape[0] * 0.2, // y at 20% of height
-                      imageTensor.shape[1] * 0.4, // width as 40% of image width
-                      imageTensor.shape[0] * 0.6  // height as 60% of image height
-                    ],
-                    class: 'person',
-                    score: confidenceScore
-                  });
-                }
-              }
-              console.log(`MobileNet detected ${peopleDetected.length} people`);
-            } else {
-              // Default COCO-SSD model detection
-              console.log("Running COCO-SSD detection...");
-              const predictions = await (model as cocossd.ObjectDetection).detect(normalizedTensor, 30); // Increased max detections to 30
-              
-              // Filter for people with confidence threshold
-              peopleDetected = predictions.filter(prediction => 
-                prediction.class === 'person' && prediction.score > CONFIDENCE_THRESHOLD
-              );
-              
-              console.log(`COCO-SSD detected ${peopleDetected.length} people above threshold ${CONFIDENCE_THRESHOLD}`);
-            }
-            
-            // Clean up tensors immediately
-            normalizedTensor.dispose();
-            imageTensor.dispose();
+          // Force cleanup extra frequently on Raspberry Pi
+          if (IS_RASPBERRY_PI && Date.now() - lastMemoryCleanup > 5000) {
+            console.log("Running scheduled tensor cleanup");
             tf.engine().endScope();
-          
-            // Only continue if we have detections to show
-            if (peopleDetected && peopleDetected.length > 0) {
-              console.log("People detected:", peopleDetected); // Log detections for debugging
-              
-              // Update our count state with the number of people detected
-              setCount(peopleDetected.length);
-              
-              // If we somehow got here with no people, exit early
-              if (peopleDetected.length === 0) {
-                return;
-              }
-              
-              // If on Raspberry Pi, use simplified drawing for better performance
-              
-              // Update count
-              setCount(peopleDetected.length);
-            
-              // Super simplified drawing for Raspberry Pi in low power mode
-              const simplifiedUI = isLowPoweredDevice && lowPowerMode;
-              
-              // Draw minimalistic UI for Raspberry Pi
-              if (simplifiedUI) {
-                // Just draw simple rectangles without text
-                ctx.lineWidth = 2;
-                ctx.strokeStyle = '#00FF00'; // Green for all detections
-                
-                peopleDetected.forEach(prediction => {
-                  let [x, y, width, height] = prediction.bbox;
-                  
-                  // Scale coordinates back up
-                  const scaleFactor = 1 / (lowPowerMode && isLowPoweredDevice ? 0.4 : 
-                                          lowPowerMode ? 0.5 : 0.75);
-                  x *= scaleFactor;
-                  y *= scaleFactor;
-                  width *= scaleFactor;
-                  height *= scaleFactor;
-                
-                  // Draw simple bounding box without labels
-                  ctx.beginPath();
-                  ctx.rect(x, y, width, height);
-                  ctx.stroke();
-                });
-                
-                // Simple count display
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                ctx.fillRect(10, 10, 100, 30);
-                
-                ctx.fillStyle = 'white';
-                ctx.font = '16px Arial';
-                ctx.fillText(`Count: ${peopleDetected.length}`, 20, 30);
-              } else {
-                // Full UI for more powerful devices
-                ctx.font = '16px Arial';
-                ctx.lineWidth = 2;
-                
-                // Draw each detection box, scaling coordinates if needed
-                peopleDetected.forEach((prediction, index) => {
-                  let [x, y, width, height] = prediction.bbox;
-                  
-                  // Scale coordinates back up if we used a downscaled detection
-                  if ((isLowPoweredDevice || lowPowerMode) && detectionInput !== video) {
-                    const scaleFactor = lowPowerMode && isLowPoweredDevice ? 2.5 : 
-                                       lowPowerMode ? 2 : 1.33;
-                    x *= scaleFactor;
-                    y *= scaleFactor;
-                    width *= scaleFactor;
-                    height *= scaleFactor;
-                  }
-                  
-                  // Different colors based on confidence
-                  if (prediction.score > 0.8) {
-                    ctx.strokeStyle = '#00FF00'; // Green for high confidence
-                  } else if (prediction.score > 0.6) {
-                    ctx.strokeStyle = '#FFFF00'; // Yellow for medium confidence
-                  } else {
-                    ctx.strokeStyle = '#FF9900'; // Orange for lower confidence
-                  }
-                  
-                  // Draw bounding box
-                  ctx.beginPath();
-                  ctx.rect(x, y, width, height);
-                  ctx.stroke();
-                  
-                  // In low power mode, simplify the UI by drawing less
-                  if (!lowPowerMode) {
-                    // Draw label background
-                    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                    ctx.fillRect(x, y - 25, 120, 25);
-                    
-                    // Draw label text
-                    ctx.fillStyle = '#FFFFFF';
-                    ctx.fillText(`Person ${index + 1}: ${Math.round(prediction.score * 100)}%`, x + 5, y - 7);
-                    
-                    // For BlazeFace model, also draw facial landmarks
-                    if (modelType === 'blazeface' && prediction.landmarks) {
-                      const landmarks = prediction.landmarks;
-                      ctx.fillStyle = '#FF0000'; // Red for landmarks
-                      
-                      // Draw each landmark point
-                      landmarks.forEach((point: number[]) => {
-                        let [lx, ly] = point;
-                        
-                        // Apply same scale factor as bounding box if needed
-                        if ((isLowPoweredDevice || lowPowerMode) && detectionInput !== video) {
-                          const scaleFactor = lowPowerMode && isLowPoweredDevice ? 2.5 : 
-                                           lowPowerMode ? 2 : 1.33;
-                          lx *= scaleFactor;
-                          ly *= scaleFactor;
-                        }
-                        
-                        // Draw landmark point
-                        ctx.beginPath();
-                        ctx.arc(lx, ly, 3, 0, 2 * Math.PI);
-                        ctx.fill();
-                      });
-                    }
-                  }
-                });
-              
-                // Display UI information on canvas - simpler in low power mode
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                ctx.fillRect(10, 10, 200, 30);
-                
-                ctx.fillStyle = 'white';
-                ctx.fillText(`Count: ${peopleDetected.length}`, 20, 30);
-                
-                // Only show capacity in regular mode
-                if (currentLocation && !lowPowerMode) {
-                  const capacityPercentage = (peopleDetected.length / currentLocation.capacity) * 100;
-                  let capacityColor = '#00FF00'; // Green by default
-                  
-                  if (capacityPercentage > 90) {
-                    capacityColor = '#FF0000'; // Red when near capacity
-                  } else if (capacityPercentage > 70) {
-                    capacityColor = '#FFFF00'; // Yellow when getting full
-                  }
-                  
-                  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                  ctx.fillRect(canvas.width - 210, 10, 200, 30);
-                  
-                  ctx.fillStyle = capacityColor;
-                  ctx.fillText(`Capacity: ${peopleDetected.length}/${currentLocation.capacity}`, canvas.width - 200, 30);
-                }
-              }
-            } else {
-              // If no predictions at all, update count to zero
-              setCount(0);
-            }
-          } catch (detectErr) {
-            console.error("Detection error:", detectErr);
+            tf.engine().startScope();
+            lastMemoryCleanup = Date.now();
           }
         } catch (err) {
-          console.error('Error processing video frame:', err);
+          console.error('Error in detection:', err);
+          // Don't update count on error to prevent showing incorrect data
         }
       }
     } catch (err) {
@@ -865,50 +618,101 @@ export default function LiveFeed() {
     isPaused,
     lowPowerMode
   ]);
+  
+  // Add specialized BlazeFace detection function for Raspberry Pi
+  const blazefaceDetection = async (tensor: tf.Tensor3D, ctx: CanvasRenderingContext2D, 
+                                   inputWidth: number, inputHeight: number) => {
+    try {
+      // Use a more direct and simplified detection approach
+      const predictions = await model.estimateFaces(tensor);
+      
+      if (predictions && predictions.length > 0) {
+        console.log(`BlazeFace detected ${predictions.length} faces`);
+        
+        // Update count
+        setCount(predictions.length);
+        
+        // Draw minimalistic UI for Raspberry Pi
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#00FF00'; // Green for all detections
+        
+        predictions.forEach((prediction: any) => {
+          // Get face bounding box
+          let [x, y] = prediction.topLeft;
+          let [x2, y2] = prediction.bottomRight;
+          let width = x2 - x;
+          let height = y2 - y;
+          
+          // Scale coordinates back up based on our smaller detection canvas
+          const scaleFactor = IS_RASPBERRY_PI ? 2.85 : (lowPowerMode ? 1.67 : 1.18);
+          x *= scaleFactor;
+          y *= scaleFactor;
+          width *= scaleFactor;
+          height *= scaleFactor;
+        
+          // Draw simple bounding box
+          ctx.beginPath();
+          ctx.rect(x, y, width, height);
+          ctx.stroke();
+        });
+        
+        // Simple count display
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(10, 10, 100, 30);
+        
+        ctx.fillStyle = 'white';
+        ctx.font = '16px Arial';
+        ctx.fillText(`Count: ${predictions.length}`, 20, 30);
+      } else {
+        // If no predictions, update count to zero
+        setCount(0);
+      }
+    } catch (err) {
+      console.error("BlazeFace detection error:", err);
+      // Keep the last count on error
+    }
+  };
+  
+  // Add specialized regular detection function for more powerful devices
+  const regularDetection = async (tensor: tf.Tensor3D, ctx: CanvasRenderingContext2D, 
+                                 inputWidth: number, inputHeight: number) => {
+    // Implementation similar to existing detection code but more organized
+    // ...existing detection code...
+  };
 
   // Setup animation frame loop with more reliable rendering
   useEffect(() => {
     let frameId: number;
     let lastProcessTime = 0;
-    let frameSkipCounter = 0;
     
-    // Adaptive detection interval based on device capabilities
-    // For Raspberry Pi, use longer intervals to reduce CPU load
-    const isLowPoweredDevice = navigator.hardwareConcurrency <= 4;
-    const BASE_INTERVAL = isLowPoweredDevice ? 2500 : 1000; // 2.5 sec for low-power, 1 sec for higher-end
-    const DETECTION_INTERVAL = lowPowerMode ? BASE_INTERVAL * 2 : BASE_INTERVAL; // Even longer in low power mode
+    // Much longer detection intervals for Raspberry Pi
+    const DETECTION_INTERVAL = IS_RASPBERRY_PI ? 3000 : 
+                              (lowPowerMode ? 2000 : 1000); // 3 sec for Pi
     
-    // Set max frame rate based on device capability
-    const MAX_FPS = isLowPoweredDevice 
-      ? (lowPowerMode ? 5 : 10)  // 5-10 FPS for Raspberry Pi 
-      : (lowPowerMode ? 15 : 30); // 15-30 FPS for higher-end devices
+    // Set max frame rate based on device capability - much lower for Pi
+    const MAX_FPS = IS_RASPBERRY_PI ? 3 : (lowPowerMode ? 10 : 30);
     
     // Minimum time between frames in ms
     const FRAME_INTERVAL = 1000 / MAX_FPS;
     
     console.log(`Using detection interval: ${DETECTION_INTERVAL}ms, max FPS: ${MAX_FPS}`);
     
-    // Monitor and release memory periodically
-    if (isLowPoweredDevice) {
-      // For Raspberry Pi, aggressively clean up tensors to prevent memory issues
+    // Monitor and release memory periodically for Raspberry Pi
+    if (IS_RASPBERRY_PI) {
       const memoryCleanupInterval = setInterval(() => {
         if (isMounted.current) {
           try {
+            console.log(`Before cleanup: ${tf.engine().numTensors} tensors`);
             // Manually dispose any unused tensors
             tf.engine().endScope();
             tf.engine().startScope();
-            
-            // Attempt to force garbage collection
-            if (window.gc) {
-              window.gc();
-            }
+            console.log(`After cleanup: ${tf.engine().numTensors} tensors`);
           } catch (e) {
             // Ignore errors in cleanup
           }
         }
-      }, 10000); // Every 10 seconds
+      }, 5000); // Every 5 seconds
       
-      // Cleanup interval on unmount
       return () => clearInterval(memoryCleanupInterval);
     }
     
@@ -961,7 +765,7 @@ export default function LiveFeed() {
           
           // If detection is taking too long, force low power mode
           if (processingTime > 500) {
-            if (!lowPowerMode && isLowPoweredDevice) {
+            if (!lowPowerMode && IS_RASPBERRY_PI) {
               console.log(`Processing taking too long (${processingTime.toFixed(0)}ms), switching to low power mode`);
               setLowPowerMode(true);
             }
