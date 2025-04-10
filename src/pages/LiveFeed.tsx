@@ -7,6 +7,10 @@ import * as blazeface from '@tensorflow-models/blazeface';
 import { usePeopleCount } from '../context/PeopleCountContext';
 import { Loader2, Camera, CameraOff, UserCheck } from 'lucide-react';
 
+// Raspberry Pi 4B specific detection - MUST BE DEFINED FIRST
+const IS_RASPBERRY_PI = navigator.userAgent.toLowerCase().includes('linux') && 
+                        navigator.hardwareConcurrency <= 4;
+
 // Model confidence threshold (0-1) - LOWER FOR RASPBERRY PI
 const CONFIDENCE_THRESHOLD = IS_RASPBERRY_PI ? 0.2 : 0.35; 
 
@@ -22,10 +26,7 @@ let isModelLoading = false;
 let frameProcessingEnabled = true;
 // Add memory tracking
 let lastMemoryCleanup = 0;
-
-// Raspberry Pi 4B specific optimizations - IMPROVED DETECTION
-const IS_RASPBERRY_PI = navigator.userAgent.toLowerCase().includes('linux') && 
-                        navigator.hardwareConcurrency <= 4;
+let frameSkipCounter = 0;  // Added missing variable declaration
 
 // Function to reset state when component unmounts
 function resetModuleState() {
