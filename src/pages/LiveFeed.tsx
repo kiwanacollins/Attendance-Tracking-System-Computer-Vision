@@ -268,14 +268,12 @@ export default function LiveFeed() {
         return model;
       } catch (finalError) {
         console.error('Emergency fallback failed:', finalError);
-        throw finalError; // Re-throw to be caught by outer catch
+        // Instead of re-throwing, handle the error here directly
+        if (isMounted.current) {
+          setError('Failed to load detection model after all attempts. Please refresh and try again.');
+        }
+        return null;
       }
-    } catch (err) {
-      console.error('Error loading any model:', err);
-      if (isMounted.current) {
-        setError('Failed to load detection model. Please refresh and try again.');
-      }
-      return null;
     } finally {
       isModelLoading = false;
     }
