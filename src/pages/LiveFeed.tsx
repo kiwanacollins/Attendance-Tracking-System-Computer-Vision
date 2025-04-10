@@ -187,7 +187,6 @@ export default function LiveFeed() {
         try {
           // Use tidy to ensure proper tensor cleanup
           await tf.ready(); // Ensure TensorFlow backend is ready
-          await tf.engine().startScope(); // Start a fresh scope
           
           tf.tidy(() => {
             // Create simple dummy tensor with minimal dimensions to reduce memory usage
@@ -207,10 +206,8 @@ export default function LiveFeed() {
           console.warn('Model pre-warming failed, but we can continue:', warmingError);
           // Pre-warming is optional - failure here shouldn't stop the whole process
         } finally {
-          // Clean up safely - check if scope is active before ending it
-          if (tf.engine().isScopeActive()) {
-            tf.engine().endScope();
-          }
+          // Clean up safely - no need to check if scope is active
+          // The tf.tidy above handles tensor cleanup automatically
         }
         
         if (isMounted.current) {
