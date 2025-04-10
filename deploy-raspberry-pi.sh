@@ -26,6 +26,11 @@ apt-get upgrade -y
 echo "Installing dependencies..."
 apt-get install -y nodejs npm nginx sqlite3 git python3-opencv
 
+# Install Node.js v18 (newer version for better TensorFlow.js support)
+echo "Installing Node.js 18.x LTS..."
+curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+apt-get install -y nodejs
+
 # Create installation directory
 echo "Creating installation directory..."
 mkdir -p "$INSTALL_DIR"
@@ -52,6 +57,20 @@ fi
 echo "Installing backend dependencies..."
 cd "$INSTALL_DIR/backend"
 npm install --production
+
+# Install optimized TensorFlow.js models for Raspberry Pi
+echo "Installing optimized TensorFlow.js models for person detection..."
+cd "$INSTALL_DIR/frontend"
+# Install the specialized models - BlazeFace is much lighter than COCO-SSD
+npm install --save @tensorflow-models/blazeface@0.1.0
+npm install --save @tensorflow-models/mobilenet@2.1.1
+npm install --save @tensorflow-models/coco-ssd@2.2.3
+
+# Apply Raspberry Pi specific performance optimizations
+echo "Applying Raspberry Pi performance optimizations..."
+cp "$INSTALL_DIR/raspberrypi-optimize.sh" /usr/local/bin/raspi-optimize
+chmod +x /usr/local/bin/raspi-optimize
+/usr/local/bin/raspi-optimize
 
 # Configure systemd service
 echo "Setting up systemd service..."

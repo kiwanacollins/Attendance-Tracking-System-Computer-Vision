@@ -1,14 +1,22 @@
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import * as tf from '@tensorflow/tfjs';
+// Import both model types for flexibility
 import * as cocossd from '@tensorflow-models/coco-ssd';
+import * as mobilenet from '@tensorflow-models/mobilenet';
+import * as blazeface from '@tensorflow-models/blazeface';
 import { usePeopleCount } from '../context/PeopleCountContext';
 import { Loader2, Camera, CameraOff, UserCheck } from 'lucide-react';
 
 // Model confidence threshold (0-1)
-const CONFIDENCE_THRESHOLD = 0.40; // Lowered threshold to improve detection sensitivity
+const CONFIDENCE_THRESHOLD = 0.35; // Further lowered threshold to improve detection sensitivity
+
+// Detection model types
+type DetectionModelType = 'cocossd' | 'blazeface' | 'mobilenet';
+const DETECTION_MODEL: DetectionModelType = 'blazeface'; // Using BlazeFace as primary model - much faster and lighter
 
 // Performance optimization flags for Raspberry Pi
-let model: cocossd.ObjectDetection | null = null;
+let model: any = null; // Use any type to accommodate different model types
+let modelType: DetectionModelType = DETECTION_MODEL;
 let isModelLoading = false;
 let frameProcessingEnabled = true;  // Control flag for frame processing on low-power devices
 
@@ -60,7 +68,7 @@ export default function LiveFeed() {
       isModelLoading = true;
       setIsModelReady(false);
 
-      console.log('Loading TensorFlow.js model...');
+      console.log('Loading optimized TensorFlow.js model for Raspberry Pi...');
 
       // ALWAYS force CPU backend on Raspberry Pi 4B for consistent performance
       if (IS_RASPBERRY_PI || navigator.hardwareConcurrency <= 4) {
@@ -80,6 +88,9 @@ export default function LiveFeed() {
         
         // Set smaller tensors as default
         tf.ENV.set('WEBGL_FORCE_F16_TEXTURES', true);
+        
+        // Disable automatic garbage collection to manage it manually
+        tf.ENV.set('IS_NODE', true);
         
         // Purge all WebGL memory if it was previously used
         try {
@@ -115,59 +126,107 @@ export default function LiveFeed() {
         tf.env().set('WEBGL_PACK', false);
       }
       
-      // Load the model (don't use tf.tidy for async operations)
-      console.log('Loading lite_mobilenet_v2 model for Raspberry Pi');
+      // Load the model based on selected model type
+      console.log(`Loading ${modelType} model optimized for Raspberry Pi`);
       
       try {
-        // First attempt to load the model from the specified path
-        const loadedModel = await cocossd.load({
-          base: 'lite_mobilenet_v2',
-          // Don't specify modelUrl first to use the default URL from TensorFlow.js CDN
-        });
-        
-        model = loadedModel;
-        console.log('Model loaded successfully from TensorFlow.js CDN');
-      } catch (modelError) {
-        console.error('Error loading model from primary source:', modelError);
-        
-        // If first attempt fails, try alternative paths
-        try {
-          console.log('Attempting to load model from alternative source...');
-          const loadedModel = await cocossd.load({
-            base: 'lite_mobilenet_v2',
-            modelUrl: 'https://tfhub.dev/tensorflow/lite-model/ssd_mobilenet_v2/1/default/1'
-          });
-          
-          model = loadedModel;
-          console.log('Model loaded successfully from alternative source');
-        } catch (fallbackError) {
-          console.error('Error loading model from alternative source:', fallbackError);
-          
-          // Last resort: Load base model without custom path
-          console.log('Loading base model as last resort...');
-          const loadedModel = await cocossd.load();
-          
-          model = loadedModel;
-          console.log('Base model loaded successfully');
+        switch (modelType) {
+          case 'blazeface':
+            // BlazeFace is extremely lightweight and optimized for face detection
+            // Often performs better on resource-constrained devices like Raspberry Pi
+            console.log('Loading BlazeFace - highly optimized for Raspberry Pi');
+            model = await blazeface.load();
+            console.log('BlazeFace model loaded successfully');
+            break;
+            
+          case 'mobilenet':
+            // MobileNet is good for general classification but we can use it for person detection
+            console.log('Loading MobileNet model - good balance of speed and accuracy');
+            model = await mobilenet.load({
+              version: 2,
+              alpha: 0.5 // Use smallest/fastest version for Raspberry Pi
+            });
+            console.log('MobileNet model loaded successfully');
+            break;
+            
+          case 'cocossd':
+          default:
+            // Try to load the most lightweight COCO-SSD model available
+            console.log('Loading lite_mobilenet_v2 COCO-SSD model');
+            
+            try {
+              // First try the lite model which is smallest and fastest
+              model = await cocossd.load({
+                base: 'lite_mobilenet_v2',
+              });
+              console.log('lite_mobilenet_v2 model loaded successfully');
+            } catch (firstError) {
+              console.error('Error loading lite model:', firstError);
+              
+              // Try another lightweight model as fallback
+              try {
+                console.log('Trying mobilenet_v2 as fallback...');
+                model = await cocossd.load({
+                  base: 'mobilenet_v2',
+                });
+                console.log('mobilenet_v2 model loaded successfully');
+              } catch (secondError) {
+                console.error('Error loading fallback model:', secondError);
+                
+                // Last resort: Load the simplest model
+                console.log('Loading base model as last resort...');
+                model = await cocossd.load();
+                console.log('Base model loaded successfully');
+              }
+            }
+            break;
         }
-      }
-      
-      // Pre-warm the model with a dummy tensor to avoid lag on first detection
-      if (IS_RASPBERRY_PI) {
+        
+        // Pre-warm the model with a dummy tensor to avoid lag on first detection
         console.log('Pre-warming model for Raspberry Pi 4B...');
         tf.tidy(() => {
-          const dummyTensor = tf.zeros([320, 240, 3]) as tf.Tensor3D;
-          model?.detect(dummyTensor);
+          const dummyTensor = tf.zeros([320, 240, 3]);
+          if (modelType === 'cocossd') {
+            (model as cocossd.ObjectDetection).detect(dummyTensor as tf.Tensor3D);
+          } else if (modelType === 'blazeface') {
+            (model as any).estimateFaces(dummyTensor as tf.Tensor3D);
+          } else if (modelType === 'mobilenet') {
+            (model as any).classify(dummyTensor as tf.Tensor3D);
+          }
         });
+        
+        // Super-aggressive memory cleanup for Raspberry Pi
+        tf.engine().endScope();
+        tf.engine().disposeVariables();
+        tf.tidy(() => {});
+        
+        if (isMounted.current) {
+          setIsModelReady(true);
+        }
+        
+        return model;
+      } catch (err) {
+        console.error('All model loading attempts failed:', err);
+        
+        // Last fallback attempt - try the absolute most basic model
+        try {
+          console.log('Attempting emergency fallback to basic BlazeFace...');
+          model = await blazeface.load();
+          modelType = 'blazeface';
+          console.log('Emergency fallback to BlazeFace successful');
+          
+          if (isMounted.current) {
+            setIsModelReady(true);
+          }
+          
+          return model;
+        } catch (finalError) {
+          console.error('Emergency fallback failed:', finalError);
+          throw finalError; // Re-throw to be caught by outer catch
+        }
       }
-      
-      if (isMounted.current) {
-        setIsModelReady(true);
-      }
-      
-      return model;
     } catch (err) {
-      console.error('Error loading model:', err);
+      console.error('Error loading any model:', err);
       if (isMounted.current) {
         setError('Failed to load detection model. Please refresh and try again.');
       }
@@ -507,34 +566,94 @@ export default function LiveFeed() {
             // For Raspberry Pi, normalize the tensor values to improve detection
             const normalizedTensor = imageTensor.toFloat().div(tf.scalar(255)) as tf.Tensor3D;
             
-            // Run detection with normalized tensor - this improves accuracy
-            const predictions = await model!.detect(normalizedTensor, 30); // Increased max detections to 30
+            // Process differently based on model type
+            let peopleDetected: any[] = [];
             
-            // Log successful detection
-            console.log("Detection completed successfully!");
+            if (modelType === 'blazeface') {
+              // BlazeFace returns face detections - perfect for counting people
+              console.log("Running BlazeFace detection...");
+              const faceResults = await (model as any).estimateFaces(normalizedTensor);
+              console.log("BlazeFace detection results:", faceResults);
+              
+              // Convert BlazeFace results to a format compatible with our existing code
+              peopleDetected = faceResults.map((face: any, index: number) => ({
+                bbox: [
+                  face.topLeft[0], // x
+                  face.topLeft[1], // y
+                  face.bottomRight[0] - face.topLeft[0], // width
+                  face.bottomRight[1] - face.topLeft[1], // height
+                ],
+                class: 'person', // Treat faces as people
+                score: face.probability[0], // Use detection probability
+                landmarks: face.landmarks // Keep face landmarks if needed
+              })).filter(detection => detection.score > CONFIDENCE_THRESHOLD);
+              
+              console.log(`BlazeFace detected ${peopleDetected.length} faces above threshold ${CONFIDENCE_THRESHOLD}`);
+            } else if (modelType === 'mobilenet') {
+              // MobileNet only classifies the whole image, so we need a different approach
+              console.log("Running MobileNet classification...");
+              const classifications = await (model as any).classify(normalizedTensor);
+              console.log("MobileNet classification results:", classifications);
+              
+              // Check if any classification includes "person" or related terms
+              const personClasses = ['person', 'people', 'human', 'man', 'woman', 'child', 'face'];
+              const personClassifications = classifications.filter((c: any) => 
+                personClasses.some(term => c.className.toLowerCase().includes(term)) && 
+                c.probability > CONFIDENCE_THRESHOLD
+              );
+              
+              // If we detect any people-related classes, estimate count based on confidence
+              if (personClassifications.length > 0) {
+                const confidenceScore = personClassifications[0].probability;
+                // Crude estimation - if confidence is really high, might be multiple people
+                const estimatedCount = confidenceScore > 0.9 ? 2 : 1;
+                
+                // Create synthetic detection boxes based on image dimensions
+                for (let i = 0; i < estimatedCount; i++) {
+                  peopleDetected.push({
+                    bbox: [
+                      imageTensor.shape[1] * 0.3 + (i * 100), // x at 30% of width + offset
+                      imageTensor.shape[0] * 0.2, // y at 20% of height
+                      imageTensor.shape[1] * 0.4, // width as 40% of image width
+                      imageTensor.shape[0] * 0.6  // height as 60% of image height
+                    ],
+                    class: 'person',
+                    score: confidenceScore
+                  });
+                }
+              }
+              console.log(`MobileNet detected ${peopleDetected.length} people`);
+            } else {
+              // Default COCO-SSD model detection
+              console.log("Running COCO-SSD detection...");
+              const predictions = await (model as cocossd.ObjectDetection).detect(normalizedTensor, 30); // Increased max detections to 30
+              
+              // Filter for people with confidence threshold
+              peopleDetected = predictions.filter(prediction => 
+                prediction.class === 'person' && prediction.score > CONFIDENCE_THRESHOLD
+              );
+              
+              console.log(`COCO-SSD detected ${peopleDetected.length} people above threshold ${CONFIDENCE_THRESHOLD}`);
+            }
             
             // Clean up tensors immediately
             normalizedTensor.dispose();
             imageTensor.dispose();
             tf.engine().endScope();
           
-            // Only clear and redraw if we have detections to show
-            if (predictions && predictions.length > 0) {
-              console.log("Raw predictions:", predictions); // Log raw predictions for debugging
+            // Only continue if we have detections to show
+            if (peopleDetected && peopleDetected.length > 0) {
+              console.log("People detected:", peopleDetected); // Log detections for debugging
               
-              // Filter for people with confidence threshold
-              const peopleDetected = predictions.filter(prediction => 
-                prediction.class === 'person' && prediction.score > CONFIDENCE_THRESHOLD
-              );
+              // Update our count state with the number of people detected
+              setCount(peopleDetected.length);
               
-              // Log filtered results for debugging
-              console.log(`Detected ${peopleDetected.length} people above threshold ${CONFIDENCE_THRESHOLD}`);
-              
-              // Update count and skip drawing if no people detected
+              // If we somehow got here with no people, exit early
               if (peopleDetected.length === 0) {
-                setCount(0);
                 return;
               }
+              
+              // If on Raspberry Pi, use simplified drawing for better performance
               
               // Update count
               setCount(peopleDetected.length);
@@ -614,6 +733,30 @@ export default function LiveFeed() {
                     // Draw label text
                     ctx.fillStyle = '#FFFFFF';
                     ctx.fillText(`Person ${index + 1}: ${Math.round(prediction.score * 100)}%`, x + 5, y - 7);
+                    
+                    // For BlazeFace model, also draw facial landmarks
+                    if (modelType === 'blazeface' && prediction.landmarks) {
+                      const landmarks = prediction.landmarks;
+                      ctx.fillStyle = '#FF0000'; // Red for landmarks
+                      
+                      // Draw each landmark point
+                      landmarks.forEach((point: number[]) => {
+                        let [lx, ly] = point;
+                        
+                        // Apply same scale factor as bounding box if needed
+                        if ((isLowPoweredDevice || lowPowerMode) && detectionInput !== video) {
+                          const scaleFactor = lowPowerMode && isLowPoweredDevice ? 2.5 : 
+                                           lowPowerMode ? 2 : 1.33;
+                          lx *= scaleFactor;
+                          ly *= scaleFactor;
+                        }
+                        
+                        // Draw landmark point
+                        ctx.beginPath();
+                        ctx.arc(lx, ly, 3, 0, 2 * Math.PI);
+                        ctx.fill();
+                      });
+                    }
                   }
                 });
               
