@@ -70,49 +70,41 @@ export default function LiveFeed() {
 
       console.log('Loading optimized TensorFlow.js model for Raspberry Pi...');
 
-      // ALWAYS force CPU backend on Raspberry Pi 4B for consistent performance
+      // Raspberry Pi specific setup with safer configuration
       if (IS_RASPBERRY_PI || navigator.hardwareConcurrency <= 4) {
-        console.log('Using CPU backend for Raspberry Pi 4B');
+        console.log('Setting up optimized TensorFlow.js for Raspberry Pi 4B');
         
-        // Hard disable WebGL on Raspberry Pi 4B - critical fix
-        tf.ENV.set('WEBGL_VERSION', 0);
-        
-        // Force CPU backend
-        await tf.setBackend('cpu');
-        
-        // Enable memory conservation mode for Raspberry Pi 4B
-        tf.ENV.set('KEEP_INTERMEDIATE_TENSORS', false);
-        
-        // Reduce WebGL memory usage
-        tf.ENV.set('WEBGL_DELETE_TEXTURE_THRESHOLD', 0);
-        
-        // Set smaller tensors as default
-        tf.ENV.set('WEBGL_FORCE_F16_TEXTURES', true);
-        
-        // Disable automatic garbage collection to manage it manually
-        tf.ENV.set('IS_NODE', true);
-        
-        // Purge all WebGL memory if it was previously used
         try {
-          if (tf.getBackend() === 'webgl') {
-            // Cast to any to access WebGL-specific methods
-            const webglBackend = tf.backend() as any;
-            if (webglBackend && webglBackend.getGPGPUContext) {
-              const gl = webglBackend.getGPGPUContext().gl;
-              if (gl) {
-                gl.finish();
-                gl.getExtension('WEBGL_lose_context')?.loseContext();
-              }
-            }
-          }
+          // First try to use WebGL with minimal settings - often works better on Pi 4
+          await tf.ready();
+          
+          // Use consistent environment variable setting format
+          tf.env().set('WEBGL_VERSION', 1); // Try WebGL 1.0 which is more compatible
+          tf.env().set('WEBGL_FORCE_F16_TEXTURES', true); // Use smaller textures
+          tf.env().set('WEBGL_PACK', false); // Disable texture packing
+          tf.env().set('KEEP_INTERMEDIATE_TENSORS', false); // Conserve memory
+          tf.env().set('WEBGL_DELETE_TEXTURE_THRESHOLD', 0); // Aggressive cleanup
+          tf.env().set('WEBGL_FLUSH_THRESHOLD', 1); // Flush WebGL commands more often
+          
+          // Set to WebGL backend with minimal features
+          await tf.setBackend('webgl');
+          console.log('Successfully set up WebGL backend with minimal settings');
         } catch (e) {
-          // Ignore errors if WebGL backend wasn't initialized
+          console.warn('WebGL setup failed, falling back to CPU:', e);
+          
+          // If WebGL fails, fall back to CPU
+          try {
+            await tf.setBackend('cpu');
+            console.log('Successfully switched to CPU backend');
+          } catch (cpuErr) {
+            console.error('CPU backend setup also failed:', cpuErr);
+          }
         }
         
-        // Manually run garbage collection if available
-        if (window.gc) {
+        // Force garbage collection if available
+        if (typeof window !== 'undefined' && (window as any).gc) {
           try {
-            window.gc();
+            (window as any).gc();
           } catch (e) {
             // Ignore if not available
           }
@@ -123,60 +115,97 @@ export default function LiveFeed() {
         
         // Optimize WebGL for higher-end devices
         tf.env().set('WEBGL_FORCE_F16_TEXTURES', true);
-        tf.env().set('WEBGL_PACK', false);
+        tf.env().set('WEBGL_PACK', true);
       }
       
       // Load the model based on selected model type
       console.log(`Loading ${modelType} model optimized for Raspberry Pi`);
       
       try {
+        // For Raspberry Pi 4B, always force to BlazeFace for best performance
+        if (IS_RASPBERRY_PI) {
+          console.log('Raspberry Pi detected: Forcing BlazeFace model for optimal performance');
+          modelType = 'blazeface';
+        }
+        
         switch (modelType) {
           case 'blazeface':
-            // BlazeFace is extremely lightweight and optimized for face detection
-            // Often performs better on resource-constrained devices like Raspberry Pi
-            console.log('Loading BlazeFace - highly optimized for Raspberry Pi');
-            model = await blazeface.load();
+            // Special loading approach for Raspberry Pi
+            if (IS_RASPBERRY_PI) {
+              console.log('Loading BlazeFace with special Pi settings');
+              // Set a timeout to prevent blocking the main thread for too long
+              const modelPromise = new Promise<any>((resolve, reject) => {
+                setTimeout(async () => {
+                  try {
+                    // Use the most basic model configuration for Raspberry Pi
+                    const loadedModel = await blazeface.load({
+                      maxFaces: 4,  // Limit detection to reduce computational load
+                      inputWidth: 128,  // Use smallest possible input dimensions
+                      inputHeight: 128,
+                      iouThreshold: 0.3,  // Lower threshold for faster processing
+                      scoreThreshold: 0.75  // Higher score threshold to reduce false positives
+                    });
+                    resolve(loadedModel);
+                  } catch (err) {
+                    reject(err);
+                  }
+                }, 100);
+              });
+              
+              model = await modelPromise;
+            } else {
+              // Regular loading for other devices
+              console.log('Loading BlazeFace - optimized for face detection');
+              model = await blazeface.load();
+            }
             console.log('BlazeFace model loaded successfully');
             break;
             
           case 'mobilenet':
-            // MobileNet is good for general classification but we can use it for person detection
+            // MobileNet is good for general classification
             console.log('Loading MobileNet model - good balance of speed and accuracy');
             model = await mobilenet.load({
               version: 2,
-              alpha: 0.5 // Use smallest/fastest version for Raspberry Pi
+              alpha: IS_RASPBERRY_PI ? 0.25 : 0.5  // Use smallest version for Pi
             });
             console.log('MobileNet model loaded successfully');
             break;
             
           case 'cocossd':
           default:
-            // Try to load the most lightweight COCO-SSD model available
-            console.log('Loading lite_mobilenet_v2 COCO-SSD model');
-            
-            try {
-              // First try the lite model which is smallest and fastest
+            // Adjust COCO-SSD loading based on device capability
+            if (IS_RASPBERRY_PI) {
+              console.log('Loading lite_mobilenet_v2 COCO-SSD model for Pi');
               model = await cocossd.load({
                 base: 'lite_mobilenet_v2',
               });
-              console.log('lite_mobilenet_v2 model loaded successfully');
-            } catch (firstError) {
-              console.error('Error loading lite model:', firstError);
+            } else {
+              // Try to load the optimal model for the device
+              console.log('Loading COCO-SSD model');
               
-              // Try another lightweight model as fallback
               try {
-                console.log('Trying mobilenet_v2 as fallback...');
+                // First try the lite model
                 model = await cocossd.load({
-                  base: 'mobilenet_v2',
+                  base: 'lite_mobilenet_v2',
                 });
-                console.log('mobilenet_v2 model loaded successfully');
-              } catch (secondError) {
-                console.error('Error loading fallback model:', secondError);
+                console.log('lite_mobilenet_v2 model loaded successfully');
+              } catch (firstError) {
+                console.error('Error loading lite model:', firstError);
                 
-                // Last resort: Load the simplest model
-                console.log('Loading base model as last resort...');
-                model = await cocossd.load();
-                console.log('Base model loaded successfully');
+                try {
+                  console.log('Trying mobilenet_v2 as fallback...');
+                  model = await cocossd.load({
+                    base: 'mobilenet_v2',
+                  });
+                  console.log('mobilenet_v2 model loaded successfully');
+                } catch (secondError) {
+                  console.error('Error loading fallback model:', secondError);
+                  
+                  // Last resort: Load the simplest model
+                  console.log('Loading base model as last resort...');
+                  model = await cocossd.load();
+                  console.log('Base model loaded successfully');
+                }
               }
             }
             break;
