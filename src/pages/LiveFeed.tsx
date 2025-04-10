@@ -70,34 +70,53 @@ export default function LiveFeed() {
 
       console.log('Loading optimized TensorFlow.js model for Raspberry Pi...');
 
-      // Raspberry Pi specific setup with safer configuration
+      // Raspberry Pi specific setup - FORCE CPU BACKEND to avoid WebGL context loss
       if (IS_RASPBERRY_PI || navigator.hardwareConcurrency <= 4) {
-        console.log('Setting up optimized TensorFlow.js for Raspberry Pi 4B');
+        console.log('Setting up TensorFlow.js for Raspberry Pi 4B - FORCING CPU MODE');
         
         try {
-          // First try to use WebGL with minimal settings - often works better on Pi 4
+          // For Raspberry Pi, ALWAYS use CPU backend to avoid WebGL context loss
+          // First make sure TensorFlow is ready
           await tf.ready();
           
-          // Use consistent environment variable setting format
-          tf.env().set('WEBGL_VERSION', 1); // Try WebGL 1.0 which is more compatible
-          tf.env().set('WEBGL_FORCE_F16_TEXTURES', true); // Use smaller textures
-          tf.env().set('WEBGL_PACK', false); // Disable texture packing
-          tf.env().set('KEEP_INTERMEDIATE_TENSORS', false); // Conserve memory
-          tf.env().set('WEBGL_DELETE_TEXTURE_THRESHOLD', 0); // Aggressive cleanup
-          tf.env().set('WEBGL_FLUSH_THRESHOLD', 1); // Flush WebGL commands more often
+          // Hard disable WebGL completely for Raspberry Pi
+          tf.env().set('WEBGL_VERSION', 0); // Disable WebGL entirely
           
-          // Set to WebGL backend with minimal features
-          await tf.setBackend('webgl');
-          console.log('Successfully set up WebGL backend with minimal settings');
-        } catch (e) {
-          console.warn('WebGL setup failed, falling back to CPU:', e);
+          // Memory optimization settings
+          tf.env().set('KEEP_INTERMEDIATE_TENSORS', false);
+          tf.env().set('CHECK_COMPUTATION_FOR_ERRORS', false); // Disable error checking
           
-          // If WebGL fails, fall back to CPU
+          // Force CPU backend
+          await tf.setBackend('cpu');
+          console.log('Successfully set up CPU backend for Raspberry Pi');
+          
+          // Reset any WebGL context that might be active
           try {
-            await tf.setBackend('cpu');
-            console.log('Successfully switched to CPU backend');
-          } catch (cpuErr) {
-            console.error('CPU backend setup also failed:', cpuErr);
+            const canvas = document.createElement('canvas');
+            const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+            if (gl) {
+              const loseContextExt = gl.getExtension('WEBGL_lose_context');
+              if (loseContextExt) {
+                loseContextExt.loseContext();
+              }
+            }
+          } catch (resetErr) {
+            // Ignore errors from WebGL reset attempts
+          }
+        } catch (e) {
+          console.error('CPU backend setup failed:', e);
+          // Last resort - try to use the most basic WebGL settings
+          try {
+            // Minimal WebGL settings as last resort
+            tf.env().set('WEBGL_VERSION', 1);
+            tf.env().set('WEBGL_FORCE_F16_TEXTURES', true);
+            tf.env().set('WEBGL_PACK', false);
+            tf.env().set('DISPOSE_TENSORS_WHEN_NODATA_OUTPUT', true);
+            tf.env().set('WEBGL_DELETE_TEXTURE_THRESHOLD', 0);
+            await tf.setBackend('webgl');
+            console.log('Fallback to minimal WebGL settings');
+          } catch (webglErr) {
+            console.error('All backend setup attempts failed:', webglErr);
           }
         }
         
