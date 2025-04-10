@@ -184,21 +184,34 @@ export default function LiveFeed() {
         
         // Pre-warm the model with a dummy tensor to avoid lag on first detection
         console.log('Pre-warming model for Raspberry Pi 4B...');
-        tf.tidy(() => {
-          const dummyTensor = tf.zeros([320, 240, 3]);
-          if (modelType === 'cocossd') {
-            (model as cocossd.ObjectDetection).detect(dummyTensor as tf.Tensor3D);
-          } else if (modelType === 'blazeface') {
-            (model as any).estimateFaces(dummyTensor as tf.Tensor3D);
-          } else if (modelType === 'mobilenet') {
-            (model as any).classify(dummyTensor as tf.Tensor3D);
+        try {
+          // Use tidy to ensure proper tensor cleanup
+          await tf.ready(); // Ensure TensorFlow backend is ready
+          await tf.engine().startScope(); // Start a fresh scope
+          
+          tf.tidy(() => {
+            // Create simple dummy tensor with minimal dimensions to reduce memory usage
+            const dummyTensor = tf.zeros([160, 120, 3]);
+            
+            // Handle different model types safely
+            if (modelType === 'cocossd' && model) {
+              (model as cocossd.ObjectDetection).detect(dummyTensor as tf.Tensor3D);
+            } else if (modelType === 'blazeface' && model) {
+              (model as any).estimateFaces(dummyTensor as tf.Tensor3D);
+            } else if (modelType === 'mobilenet' && model) {
+              (model as any).classify(dummyTensor as tf.Tensor3D);
+            }
+            // No need to manually dispose the tensor, tidy does this automatically
+          });
+        } catch (warmingError) {
+          console.warn('Model pre-warming failed, but we can continue:', warmingError);
+          // Pre-warming is optional - failure here shouldn't stop the whole process
+        } finally {
+          // Clean up safely - check if scope is active before ending it
+          if (tf.engine().isScopeActive()) {
+            tf.engine().endScope();
           }
-        });
-        
-        // Super-aggressive memory cleanup for Raspberry Pi
-        tf.engine().endScope();
-        tf.engine().disposeVariables();
-        tf.tidy(() => {});
+        }
         
         if (isMounted.current) {
           setIsModelReady(true);
